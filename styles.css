@@ -1,0 +1,25 @@
+.bkga-underline {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 2px;
+}
+
+.bkga-spelling {
+  text-decoration-color: #ff4444;
+}
+
+.bkga-spacing {
+  text-decoration-color: #ffcc00;
+}
+
+.bkga-standard {
+  text-decoration-color: #bb44ff;
+}
+
+.bkga-statistical {
+  text-decoration-color: #4488ff;
+}
+
+.bkga-default {
+  text-decoration-color: var(--text-accent, #ff4444);
+}

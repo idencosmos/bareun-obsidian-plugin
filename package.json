@@ -1,0 +1,23 @@
+{
+  "name": "bareun-grammar-assistant-obsidian",
+  "version": "0.1.0",
+  "description": "Bareun 기반 Obsidian 한국어 맞춤법 검사기",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --outfile=main.js --format=cjs --platform=node --sourcemap --external:obsidian --external:@codemirror/state --external:@codemirror/view",
+    "dev": "esbuild src/main.ts --bundle --outfile=main.js --format=cjs --platform=node --sourcemap --watch --external:obsidian --external:@codemirror/state --external:@codemirror/view",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.10",
+    "@types/node": "^18.0.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "^1.5.7",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/view": "^6.24.0",
+    "micromatch": "^4.0.5"
+  }
+}
