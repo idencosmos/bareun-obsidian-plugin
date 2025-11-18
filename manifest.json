@@ -5,6 +5,6 @@
   "minAppVersion": "1.5.0",
   "description": "Bareun-powered Korean grammar assistant for Markdown notes.",
   "author": "idencosmos",
-  "authorUrl": "https://github.com/idencosmos/bareun-obsidian-plugin",
+  "authorUrl": "https://github.com/idencosmos",
   "isDesktopOnly": true
 }
