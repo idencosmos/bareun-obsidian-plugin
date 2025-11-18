@@ -1,7 +1,7 @@
 {
   "id": "bareun-grammar-assistant",
   "name": "Bareun Grammar Assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.5.0",
   "description": "Obsidian용 바른 한국어 맞춤법/문법 검사기 (BKGA).",
   "author": "Hun-Bot",
