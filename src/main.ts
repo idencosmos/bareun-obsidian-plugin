@@ -290,8 +290,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Ignore text that is mostly English')
-      .setDesc('Skip diagnostics for spans that contain mostly English text.')
+      .setName('Ignore english-heavy text')
+      .setDesc('Skip diagnostics for spans that contain mostly english text.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
           this.plugin.settings.ignoreEnglish = value;
