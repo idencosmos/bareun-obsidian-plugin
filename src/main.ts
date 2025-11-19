@@ -213,7 +213,7 @@ export default class BareunObsidianPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const loaded = await this.loadData();
+    const loaded = ((await this.loadData()) ?? {}) as Partial<BkgaSettings>;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
   }
 

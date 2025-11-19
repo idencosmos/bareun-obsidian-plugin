@@ -6,12 +6,16 @@
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outfile=main.js --format=cjs --platform=node --sourcemap --external:obsidian --external:@codemirror/state --external:@codemirror/view",
     "dev": "esbuild src/main.ts --bundle --outfile=main.js --format=cjs --platform=node --sourcemap --watch --external:obsidian --external:@codemirror/state --external:@codemirror/view",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint ."
   },
   "devDependencies": {
     "@types/micromatch": "^4.0.10",
     "@types/node": "^18.0.0",
+    "@typescript-eslint/parser": "^8.47.0",
     "esbuild": "^0.21.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-obsidianmd": "^0.1.9",
     "obsidian": "^1.5.7",
     "typescript": "^5.0.0"
   },

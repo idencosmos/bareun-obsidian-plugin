@@ -45,7 +45,7 @@ export class BareunClient {
           }
 
           try {
-            const json: BareunResponse = JSON.parse(raw);
+            const json = JSON.parse(raw) as unknown as BareunResponse;
             resolve(BareunClient.parseResponse(json));
           } catch (err) {
             reject(err instanceof Error ? err : new Error(String(err)));
