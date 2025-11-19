@@ -54,7 +54,7 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: 'bkga-analyze-active-note',
-      name: 'Run BKGA on current note',
+      name: 'Run grammar assistant on current note',
       callback: () => {
         void this.runActiveAnalysis(true);
       },
@@ -230,7 +230,7 @@ class BkgaSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName('Bareun grammar assistant').setHeading();
+    new Setting(containerEl).setName('Grammar assistant settings').setHeading();
 
     new Setting(containerEl)
       .setName('Enable extension')
@@ -252,7 +252,7 @@ class BkgaSettingTab extends PluginSettingTab {
       .setDesc('Enter the API key issued at https://bareun.ai.')
       .addText((text) =>
         text
-          .setPlaceholder('bareun_...')
+          .setPlaceholder('Example: bareun_abc123')
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
             this.plugin.settings.apiKey = value.trim();
@@ -290,8 +290,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Ignore English phrases')
-      .setDesc('Skip diagnostics for English-heavy Markdown spans.')
+      .setName('Ignore phrases written in English')
+      .setDesc('Skip diagnostics for Markdown spans that are mostly English.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
           this.plugin.settings.ignoreEnglish = value;
