@@ -230,7 +230,7 @@ class BkgaSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName('Grammar assistant settings').setHeading();
+    new Setting(containerEl).setName('Grammar assistant').setHeading();
 
     new Setting(containerEl)
       .setName('Enable extension')
@@ -290,8 +290,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Ignore phrases written in English')
-      .setDesc('Skip diagnostics for Markdown spans that are mostly English.')
+      .setName('Ignore text that is mostly English')
+      .setDesc('Skip diagnostics for spans that contain mostly English text.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
           this.plugin.settings.ignoreEnglish = value;

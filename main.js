@@ -3223,7 +3223,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Grammar assistant settings").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Grammar assistant").setHeading();
     new import_obsidian.Setting(containerEl).setName("Enable extension").setDesc("Turn on automatic analysis.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
         this.plugin.settings.enabled = value;
@@ -3253,7 +3253,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Ignore phrases written in English").setDesc("Skip diagnostics for Markdown spans that are mostly English.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Ignore text that is mostly English").setDesc("Skip diagnostics for spans that contain mostly English text.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
         this.plugin.settings.ignoreEnglish = value;
         await this.plugin.saveBkgaSettings();
