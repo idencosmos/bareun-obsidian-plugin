@@ -46,7 +46,7 @@ export default class BareunObsidianPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.statusBarEl = this.addStatusBarItem();
-    this.updateStatus('대기');
+    this.updateStatus('Idle');
 
     this.registerEditorExtension(createDecorationExtension(this));
 
@@ -54,8 +54,10 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: 'bkga-analyze-active-note',
-      name: 'BKGA: 현재 노트 분석',
-      callback: () => this.runActiveAnalysis(true),
+      name: 'Run BKGA on current note',
+      callback: () => {
+        void this.runActiveAnalysis(true);
+      },
     });
 
     this.registerEvent(
@@ -69,7 +71,7 @@ export default class BareunObsidianPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (file) {
-          this.runAnalysisForFile(file, false);
+          void this.runAnalysisForFile(file, false);
         }
       })
     );
@@ -78,13 +80,13 @@ export default class BareunObsidianPlugin extends Plugin {
       this.app.workspace.on('active-leaf-change', () => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (view?.file) {
-          this.runAnalysisForFile(view.file, false);
+          void this.runAnalysisForFile(view.file, false);
         }
       })
     );
 
-    // 초기 노트 분석
-    this.runActiveAnalysis(false);
+    // Initial analysis to prime diagnostics
+    await this.runActiveAnalysis(false);
   }
 
   onunload() {
@@ -121,7 +123,7 @@ export default class BareunObsidianPlugin extends Plugin {
     }
     const timer = window.setTimeout(() => {
       this.pendingTimers.delete(path);
-      this.runAnalysis(path, editor.getValue()).catch((err) => console.error('[BKGA] 분석 실패', err));
+      this.runAnalysis(path, editor.getValue()).catch((err) => console.error('[BKGA] Analysis failed', err));
     }, this.settings.debounceMs);
     this.pendingTimers.set(path, timer);
   }
@@ -147,38 +149,43 @@ export default class BareunObsidianPlugin extends Plugin {
   private async runAnalysis(path: string, text: string, showNotice = false) {
     if (!this.settings.enabled) {
       this.clearDiagnostics(path);
-      this.updateStatus('비활성화됨');
+      this.updateStatus('Disabled');
       return;
     }
 
     const endpoint = (this.settings.endpoint || '').trim() || DEFAULT_BAREUN_REVISION_ENDPOINT;
     const apiKey = this.settings.apiKey.trim();
 
-    this.updateStatus('분석 중...');
+    this.updateStatus('Analyzing...');
 
     try {
       let issues: ProcessedIssue[] = [];
       if (!apiKey) {
         issues = buildLocalHeuristics(text);
-        this.updateStatus('API 키 필요 (로컬)');
+        this.updateStatus('API key required (local)');
         if (showNotice) {
-          new Notice('Bareun API 키가 없어 로컬 검사만 수행합니다.');
+          new Notice('Bareun API key missing; running local heuristics only.');
         }
       } else {
         const raw = await BareunClient.analyze(endpoint, apiKey, text);
         issues = refineIssues(text, raw, { ignoreEnglish: this.settings.ignoreEnglish });
-        this.updateStatus(issues.length ? `${issues.length}개 문제` : '문제 없음');
+        if (issues.length) {
+          const label = issues.length === 1 ? '1 issue' : `${issues.length} issues`;
+          this.updateStatus(label);
+        } else {
+          this.updateStatus('No issues');
+        }
       }
       this.diagnostics.set(path, issues);
       this.signalDiagnosticsChanged();
     } catch (err) {
-      console.error('[BKGA] Bareun 분석 오류', err);
+      console.error('[BKGA] Bareun analysis error', err);
       const fallback = buildLocalHeuristics(text);
       this.diagnostics.set(path, fallback);
       this.signalDiagnosticsChanged();
-      this.updateStatus('API 오류 (로컬)');
+      this.updateStatus('API error (local)');
       if (showNotice) {
-        new Notice('Bareun API 호출에 실패해 로컬 검사 결과를 보여줍니다.');
+        new Notice('Bareun API request failed; showing local heuristics.');
       }
     }
   }
@@ -223,26 +230,26 @@ class BkgaSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl('h2', { text: 'Bareun Korean Grammar Assistant' });
+    new Setting(containerEl).setName('Bareun grammar assistant').setHeading();
 
     new Setting(containerEl)
-      .setName('확장 기능 활성화')
-      .setDesc('자동 분석을 사용하려면 활성화하세요.')
+      .setName('Enable extension')
+      .setDesc('Turn on automatic analysis.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
           this.plugin.settings.enabled = value;
           await this.plugin.saveBkgaSettings();
           if (!value) {
-            this.plugin.updateStatus('비활성화됨');
+            this.plugin.updateStatus('Disabled');
           } else {
-            this.plugin.updateStatus('대기');
+            this.plugin.updateStatus('Idle');
           }
         })
       );
 
     new Setting(containerEl)
-      .setName('Bareun API 키')
-      .setDesc('https://bareun.ai 에서 발급받은 API 키')
+      .setName('Bareun API key')
+      .setDesc('Enter the API key issued at https://bareun.ai.')
       .addText((text) =>
         text
           .setPlaceholder('bareun_...')
@@ -254,8 +261,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Bareun 엔드포인트')
-      .setDesc('비워두면 기본 클라우드 엔드포인트를 사용합니다.')
+      .setName('Bareun endpoint')
+      .setDesc('Leave empty to use the default cloud endpoint.')
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_BAREUN_REVISION_ENDPOINT)
@@ -267,11 +274,11 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('분석 대상 경로')
-      .setDesc('Micromatch 패턴 배열. 예: content/**/*.md')
+      .setName('Analysis paths')
+      .setDesc('Micromatch patterns, e.g., content/**/*.md.')
       .addText((text) =>
         text
-          .setPlaceholder('쉼표로 구분된 glob 패턴')
+          .setPlaceholder('Comma-separated glob patterns')
           .setValue(this.plugin.settings.includeGlobs.join(', '))
           .onChange(async (value) => {
             this.plugin.settings.includeGlobs = value
@@ -283,8 +290,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('영어 문구 무시')
-      .setDesc('Markdown에서 영어 위주의 구문은 진단에서 제외합니다.')
+      .setName('Ignore English phrases')
+      .setDesc('Skip diagnostics for English-heavy Markdown spans.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
           this.plugin.settings.ignoreEnglish = value;
@@ -293,8 +300,8 @@ class BkgaSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('자동 분석 지연(ms)')
-      .setDesc('짧을수록 입력 직후 바로 검사합니다.')
+      .setName('Auto-analysis delay (ms)')
+      .setDesc('Lower values trigger checks sooner after edits.')
       .addSlider((slider) =>
         slider
           .setLimits(200, 2000, 50)
@@ -353,7 +360,7 @@ function createDecorationExtension(plugin: BareunObsidianPlugin) {
             class: `bkga-underline ${categoryToClass(issue.category)}`,
             attributes: {
               title: issue.suggestion && issue.suggestion !== ''
-                ? `${issue.message}\n제안: ${issue.suggestion}`
+                ? `${issue.message}\nSuggestion: ${issue.suggestion}`
                 : issue.message,
             },
           });

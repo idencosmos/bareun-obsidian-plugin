@@ -2992,7 +2992,7 @@ function shouldIgnoreSnippet(snippet, category, ignoreEnglish) {
   return false;
 }
 function isLikelyEnglish(text) {
-  const cleaned = text.replace(/[`*_#>~.,!?"'()\[\]{}:;+\-=\\/0-9\s]/g, "");
+  const cleaned = text.replace(/[^A-Za-z가-힣]/g, "");
   if (!cleaned) {
     return false;
   }
@@ -3006,7 +3006,7 @@ function containsShortcutPattern(text) {
   if (!shortcutRegex.test(text)) {
     return false;
   }
-  return /\+/.test(text) || /[()\[]/.test(text);
+  return /\+/.test(text) || /[()[\]]/.test(text);
 }
 function containsMarkdownLink(text) {
   return /\[[^\]]+\]\([^)]+\)/.test(text);
@@ -3033,7 +3033,7 @@ function containsParentheticalList(text) {
   if (parts.length < 2) {
     return false;
   }
-  const validPart = /^[가-힣0-9\s·\-]+$/;
+  const validPart = /^[가-힣0-9\s·-]+$/;
   return parts.every((part) => validPart.test(part));
 }
 function safeSlice(text, start, end) {
@@ -3065,13 +3065,15 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.statusBarEl = this.addStatusBarItem();
-    this.updateStatus("\uB300\uAE30");
+    this.updateStatus("Idle");
     this.registerEditorExtension(createDecorationExtension(this));
     this.addSettingTab(new BkgaSettingTab(this.app, this));
     this.addCommand({
       id: "bkga-analyze-active-note",
-      name: "BKGA: \uD604\uC7AC \uB178\uD2B8 \uBD84\uC11D",
-      callback: () => this.runActiveAnalysis(true)
+      name: "Run BKGA on current note",
+      callback: () => {
+        void this.runActiveAnalysis(true);
+      }
     });
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, view) => {
@@ -3083,7 +3085,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file) {
-          this.runAnalysisForFile(file, false);
+          void this.runAnalysisForFile(file, false);
         }
       })
     );
@@ -3091,11 +3093,11 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
       this.app.workspace.on("active-leaf-change", () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (view?.file) {
-          this.runAnalysisForFile(view.file, false);
+          void this.runAnalysisForFile(view.file, false);
         }
       })
     );
-    this.runActiveAnalysis(false);
+    await this.runActiveAnalysis(false);
   }
   onunload() {
     this.pendingTimers.forEach((timer) => window.clearTimeout(timer));
@@ -3126,7 +3128,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     }
     const timer = window.setTimeout(() => {
       this.pendingTimers.delete(path);
-      this.runAnalysis(path, editor.getValue()).catch((err) => console.error("[BKGA] \uBD84\uC11D \uC2E4\uD328", err));
+      this.runAnalysis(path, editor.getValue()).catch((err) => console.error("[BKGA] Analysis failed", err));
     }, this.settings.debounceMs);
     this.pendingTimers.set(path, timer);
   }
@@ -3149,35 +3151,40 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   async runAnalysis(path, text, showNotice = false) {
     if (!this.settings.enabled) {
       this.clearDiagnostics(path);
-      this.updateStatus("\uBE44\uD65C\uC131\uD654\uB428");
+      this.updateStatus("Disabled");
       return;
     }
     const endpoint = (this.settings.endpoint || "").trim() || DEFAULT_BAREUN_REVISION_ENDPOINT;
     const apiKey = this.settings.apiKey.trim();
-    this.updateStatus("\uBD84\uC11D \uC911...");
+    this.updateStatus("Analyzing...");
     try {
       let issues = [];
       if (!apiKey) {
         issues = buildLocalHeuristics(text);
-        this.updateStatus("API \uD0A4 \uD544\uC694 (\uB85C\uCEEC)");
+        this.updateStatus("API key required (local)");
         if (showNotice) {
-          new import_obsidian.Notice("Bareun API \uD0A4\uAC00 \uC5C6\uC5B4 \uB85C\uCEEC \uAC80\uC0AC\uB9CC \uC218\uD589\uD569\uB2C8\uB2E4.");
+          new import_obsidian.Notice("Bareun API key missing; running local heuristics only.");
         }
       } else {
         const raw = await BareunClient.analyze(endpoint, apiKey, text);
         issues = refineIssues(text, raw, { ignoreEnglish: this.settings.ignoreEnglish });
-        this.updateStatus(issues.length ? `${issues.length}\uAC1C \uBB38\uC81C` : "\uBB38\uC81C \uC5C6\uC74C");
+        if (issues.length) {
+          const label = issues.length === 1 ? "1 issue" : `${issues.length} issues`;
+          this.updateStatus(label);
+        } else {
+          this.updateStatus("No issues");
+        }
       }
       this.diagnostics.set(path, issues);
       this.signalDiagnosticsChanged();
     } catch (err) {
-      console.error("[BKGA] Bareun \uBD84\uC11D \uC624\uB958", err);
+      console.error("[BKGA] Bareun analysis error", err);
       const fallback = buildLocalHeuristics(text);
       this.diagnostics.set(path, fallback);
       this.signalDiagnosticsChanged();
-      this.updateStatus("API \uC624\uB958 (\uB85C\uCEEC)");
+      this.updateStatus("API error (local)");
       if (showNotice) {
-        new import_obsidian.Notice("Bareun API \uD638\uCD9C\uC5D0 \uC2E4\uD328\uD574 \uB85C\uCEEC \uAC80\uC0AC \uACB0\uACFC\uB97C \uBCF4\uC5EC\uC90D\uB2C8\uB2E4.");
+        new import_obsidian.Notice("Bareun API request failed; showing local heuristics.");
       }
     }
   }
@@ -3216,43 +3223,43 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Bareun Korean Grammar Assistant" });
-    new import_obsidian.Setting(containerEl).setName("\uD655\uC7A5 \uAE30\uB2A5 \uD65C\uC131\uD654").setDesc("\uC790\uB3D9 \uBD84\uC11D\uC744 \uC0AC\uC6A9\uD558\uB824\uBA74 \uD65C\uC131\uD654\uD558\uC138\uC694.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Bareun grammar assistant").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Enable extension").setDesc("Turn on automatic analysis.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
         this.plugin.settings.enabled = value;
         await this.plugin.saveBkgaSettings();
         if (!value) {
-          this.plugin.updateStatus("\uBE44\uD65C\uC131\uD654\uB428");
+          this.plugin.updateStatus("Disabled");
         } else {
-          this.plugin.updateStatus("\uB300\uAE30");
+          this.plugin.updateStatus("Idle");
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Bareun API \uD0A4").setDesc("https://bareun.ai \uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4").addText(
+    new import_obsidian.Setting(containerEl).setName("Bareun API key").setDesc("Enter the API key issued at https://bareun.ai.").addText(
       (text) => text.setPlaceholder("bareun_...").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value.trim();
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Bareun \uC5D4\uB4DC\uD3EC\uC778\uD2B8").setDesc("\uBE44\uC6CC\uB450\uBA74 \uAE30\uBCF8 \uD074\uB77C\uC6B0\uB4DC \uC5D4\uB4DC\uD3EC\uC778\uD2B8\uB97C \uC0AC\uC6A9\uD569\uB2C8\uB2E4.").addText(
+    new import_obsidian.Setting(containerEl).setName("Bareun endpoint").setDesc("Leave empty to use the default cloud endpoint.").addText(
       (text) => text.setPlaceholder(DEFAULT_BAREUN_REVISION_ENDPOINT).setValue(this.plugin.settings.endpoint).onChange(async (value) => {
         this.plugin.settings.endpoint = value.trim();
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("\uBD84\uC11D \uB300\uC0C1 \uACBD\uB85C").setDesc("Micromatch \uD328\uD134 \uBC30\uC5F4. \uC608: content/**/*.md").addText(
-      (text) => text.setPlaceholder("\uC27C\uD45C\uB85C \uAD6C\uBD84\uB41C glob \uD328\uD134").setValue(this.plugin.settings.includeGlobs.join(", ")).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Analysis paths").setDesc("Micromatch patterns, e.g., content/**/*.md.").addText(
+      (text) => text.setPlaceholder("Comma-separated glob patterns").setValue(this.plugin.settings.includeGlobs.join(", ")).onChange(async (value) => {
         this.plugin.settings.includeGlobs = value.split(",").map((v) => v.trim()).filter(Boolean);
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("\uC601\uC5B4 \uBB38\uAD6C \uBB34\uC2DC").setDesc("Markdown\uC5D0\uC11C \uC601\uC5B4 \uC704\uC8FC\uC758 \uAD6C\uBB38\uC740 \uC9C4\uB2E8\uC5D0\uC11C \uC81C\uC678\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Ignore English phrases").setDesc("Skip diagnostics for English-heavy Markdown spans.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.ignoreEnglish).onChange(async (value) => {
         this.plugin.settings.ignoreEnglish = value;
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("\uC790\uB3D9 \uBD84\uC11D \uC9C0\uC5F0(ms)").setDesc("\uC9E7\uC744\uC218\uB85D \uC785\uB825 \uC9C1\uD6C4 \uBC14\uB85C \uAC80\uC0AC\uD569\uB2C8\uB2E4.").addSlider(
+    new import_obsidian.Setting(containerEl).setName("Auto-analysis delay (ms)").setDesc("Lower values trigger checks sooner after edits.").addSlider(
       (slider) => slider.setLimits(200, 2e3, 50).setValue(this.plugin.settings.debounceMs).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.debounceMs = value;
         await this.plugin.saveBkgaSettings();
@@ -3297,7 +3304,7 @@ function createDecorationExtension(plugin) {
             class: `bkga-underline ${categoryToClass(issue.category)}`,
             attributes: {
               title: issue.suggestion && issue.suggestion !== "" ? `${issue.message}
-\uC81C\uC548: ${issue.suggestion}` : issue.message
+Suggestion: ${issue.suggestion}` : issue.message
             }
           });
           builder.add(from, to, deco);

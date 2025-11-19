@@ -137,7 +137,7 @@ function shouldIgnoreSnippet(snippet: string, category: string, ignoreEnglish: b
 }
 
 function isLikelyEnglish(text: string): boolean {
-  const cleaned = text.replace(/[`*_#>~.,!?"'()\[\]{}:;+\-=\\/0-9\s]/g, '');
+  const cleaned = text.replace(/[^A-Za-z가-힣]/g, '');
   if (!cleaned) {
     return false;
   }
@@ -152,7 +152,7 @@ function containsShortcutPattern(text: string): boolean {
   if (!shortcutRegex.test(text)) {
     return false;
   }
-  return /\+/.test(text) || /[()\[]/.test(text);
+  return /\+/.test(text) || /[()[\]]/.test(text);
 }
 
 function containsMarkdownLink(text: string): boolean {
@@ -187,7 +187,7 @@ function containsParentheticalList(text: string): boolean {
   if (parts.length < 2) {
     return false;
   }
-  const validPart = /^[가-힣0-9\s·\-]+$/;
+  const validPart = /^[가-힣0-9\s·-]+$/;
   return parts.every((part) => validPart.test(part));
 }
 
