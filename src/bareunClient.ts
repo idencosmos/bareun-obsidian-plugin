@@ -77,10 +77,11 @@ export class BareunClient {
       const length = block.origin?.length ?? 0;
       const suggestion = block.revised;
       const category = block.revisions[0]?.category ?? 'UNKNOWN';
+      const message = block.revisions[0]?.description || category;
       issues.push({
         start: offset,
         end: offset + length,
-        message: `${category}: ${suggestion ?? ''}`,
+        message,
         suggestion,
         severity: category === 'TYPO' ? 'error' : 'warning',
       });

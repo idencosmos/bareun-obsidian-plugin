@@ -21,5 +21,163 @@
 }
 
 .bkga-default {
-  text-decoration-color: var(--text-accent, #ff4444);
+  text-decoration-color: #6c757d;
+}
+
+.bkga-status {
+  cursor: pointer;
+}
+
+.bkga-issues-view {
+  padding: 12px;
+  padding-bottom: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.bkga-issues-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.bkga-issues-title {
+  font-weight: 700;
+}
+
+.bkga-issues-count {
+  color: var(--text-muted);
+}
+
+.bkga-empty {
+  color: var(--text-muted);
+}
+
+.bkga-issues-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bkga-issues-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.bkga-reset {
+  margin-left: auto;
+  color: var(--text-accent);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.bkga-issue-item {
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bkga-issue-item:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.bkga-issue-title {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-weight: 600;
+}
+
+.bkga-issue-index {
+  color: var(--text-muted);
+}
+
+.bkga-issue-message {
+  flex: 1;
+}
+
+.bkga-issue-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.bkga-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  margin-right: 6px;
+  cursor: pointer;
+}
+
+.bkga-issue-pos {
+  margin-right: 8px;
+}
+
+.bkga-issue-suggestion-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.bkga-issue-suggestion-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.bkga-issue-suggestion-text {
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.bkga-issue-suggestion-row .bkga-apply-btn {
+  margin-left: auto;
+}
+
+.bkga-apply-btn:hover {
+  background: var(--interactive-hover);
+}
+
+.bkga-badge.bkga-spelling {
+  background-color: #ff4444;
+}
+
+.bkga-badge.bkga-spacing {
+  background-color: #ffcc00;
+  color: #222;
+}
+
+.bkga-badge.bkga-standard {
+  background-color: #bb44ff;
+}
+
+.bkga-badge.bkga-statistical {
+  background-color: #4488ff;
+}
+
+.bkga-badge.bkga-default {
+  background-color: #6c757d;
+}
+
+.bkga-badge.inactive {
+  opacity: 0.4;
+  filter: grayscale(30%);
 }

@@ -12,7 +12,7 @@ export type BareunIssue = {
 export type BareunResponse = {
   revisedBlocks?: Array<{
     origin?: { beginOffset?: number; length?: number };
-    revisions?: Array<{ category?: string }>;
+    revisions?: Array<{ category?: string; description?: string }>;
     revised?: string;
   }>;
 };

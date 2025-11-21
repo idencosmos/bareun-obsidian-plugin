@@ -1,6 +1,6 @@
 import { BareunIssue } from './constants';
 
-export type ProcessedIssue = BareunIssue & { category: string };
+export type ProcessedIssue = BareunIssue & { category: string; snippet: string };
 
 export type AnalyzeOptions = {
   ignoreEnglish?: boolean;
@@ -17,18 +17,19 @@ export function refineIssues(
   const processed: ProcessedIssue[] = [];
 
   for (const issue of issues) {
-    if (intersectsInlineCode(issue.start, issue.end, inlineSpans)) {
+    const normalized = normalizeRange(text, issue.start, issue.end);
+    if (!normalized) {
       continue;
     }
-    const snippet = safeSlice(text, issue.start, issue.end);
+    const { start, end, snippet } = normalized;
+    if (intersectsInlineCode(start, end, inlineSpans)) {
+      continue;
+    }
     const category = extractCategory(issue.message);
-    if (!snippet) {
-      continue;
-    }
     if (shouldIgnoreSnippet(snippet, category, ignoreEnglish)) {
       continue;
     }
-    processed.push({ ...issue, category });
+    processed.push({ ...issue, start, end, category, snippet });
   }
 
   return processed;
@@ -47,6 +48,7 @@ export function buildLocalHeuristics(text: string): ProcessedIssue[] {
       suggestion: ' ',
       severity: 'warning',
       category: 'SPACING',
+      snippet: text.slice(m.index, m.index + m[0].length),
     });
   }
 
@@ -62,6 +64,7 @@ export function buildLocalHeuristics(text: string): ProcessedIssue[] {
         suggestion: '',
         severity: 'info',
         category: 'SPACING',
+        snippet: line.slice(trimmedLength),
       });
     }
     pos += line.length + 1;
@@ -191,9 +194,50 @@ function containsParentheticalList(text: string): boolean {
   return parts.every((part) => validPart.test(part));
 }
 
-function safeSlice(text: string, start: number, end: number): string {
-  if (start < 0 || end < 0 || start >= text.length || end <= start) {
-    return '';
+function normalizeRange(
+  text: string,
+  start: number,
+  end: number
+): { start: number; end: number; snippet: string } | null {
+  if (!text.length) {
+    return null;
   }
-  return text.slice(start, Math.min(end, text.length));
+  const len = text.length;
+
+  // Fast path: already within bounds and non-empty.
+  if (start >= 0 && end > start && end <= len) {
+    const snippet = text.slice(start, end);
+    return snippet ? { start, end, snippet } : null;
+  }
+
+  // Fallback: Bareun offsets may be byte-based (UTF-8) rather than code units.
+  const startByUtf8 = utf8OffsetToIndex(text, start);
+  const endByUtf8 = utf8OffsetToIndex(text, end);
+
+  const normalizedStart = clamp(startByUtf8, 0, len);
+  let normalizedEnd = clamp(Math.max(endByUtf8, normalizedStart + 1), 0, len);
+  if (normalizedEnd <= normalizedStart) {
+    normalizedEnd = Math.min(len, normalizedStart + 1);
+  }
+  const snippet = text.slice(normalizedStart, normalizedEnd);
+  return snippet ? { start: normalizedStart, end: normalizedEnd, snippet } : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function utf8OffsetToIndex(text: string, utf8Offset: number): number {
+  if (utf8Offset <= 0) {
+    return 0;
+  }
+  let acc = 0;
+  for (let i = 0; i < text.length; i++) {
+    const bytes = Buffer.byteLength(text[i], 'utf8');
+    if (acc + bytes > utf8Offset) {
+      return i;
+    }
+    acc += bytes;
+  }
+  return text.length;
 }

@@ -2865,10 +2865,11 @@ var BareunClient = class _BareunClient {
       const length = block.origin?.length ?? 0;
       const suggestion = block.revised;
       const category = block.revisions[0]?.category ?? "UNKNOWN";
+      const message = block.revisions[0]?.description || category;
       issues.push({
         start: offset,
         end: offset + length,
-        message: `${category}: ${suggestion ?? ""}`,
+        message,
         suggestion,
         severity: category === "TYPO" ? "error" : "warning"
       });
@@ -2886,18 +2887,19 @@ function refineIssues(text, issues, options = {}) {
   const inlineSpans = computeInlineCodeOffsets(text);
   const processed = [];
   for (const issue of issues) {
-    if (intersectsInlineCode(issue.start, issue.end, inlineSpans)) {
+    const normalized = normalizeRange(text, issue.start, issue.end);
+    if (!normalized) {
       continue;
     }
-    const snippet = safeSlice(text, issue.start, issue.end);
+    const { start, end, snippet } = normalized;
+    if (intersectsInlineCode(start, end, inlineSpans)) {
+      continue;
+    }
     const category = extractCategory(issue.message);
-    if (!snippet) {
-      continue;
-    }
     if (shouldIgnoreSnippet(snippet, category, ignoreEnglish)) {
       continue;
     }
-    processed.push({ ...issue, category });
+    processed.push({ ...issue, start, end, category, snippet });
   }
   return processed;
 }
@@ -2912,7 +2914,8 @@ function buildLocalHeuristics(text) {
       message: "\uC5EC\uBD84\uC758 \uACF5\uBC31\uC774 \uC788\uC2B5\uB2C8\uB2E4.",
       suggestion: " ",
       severity: "warning",
-      category: "SPACING"
+      category: "SPACING",
+      snippet: text.slice(m.index, m.index + m[0].length)
     });
   }
   const lines = text.split(/\r?\n/);
@@ -2926,7 +2929,8 @@ function buildLocalHeuristics(text) {
         message: "\uD589 \uB05D\uC5D0 \uBD88\uD544\uC694\uD55C \uACF5\uBC31\uC774 \uC788\uC2B5\uB2C8\uB2E4.",
         suggestion: "",
         severity: "info",
-        category: "SPACING"
+        category: "SPACING",
+        snippet: line.slice(trimmedLength)
       });
     }
     pos += line.length + 1;
@@ -3036,11 +3040,41 @@ function containsParentheticalList(text) {
   const validPart = /^[가-힣0-9\s·-]+$/;
   return parts.every((part) => validPart.test(part));
 }
-function safeSlice(text, start, end) {
-  if (start < 0 || end < 0 || start >= text.length || end <= start) {
-    return "";
+function normalizeRange(text, start, end) {
+  if (!text.length) {
+    return null;
   }
-  return text.slice(start, Math.min(end, text.length));
+  const len = text.length;
+  if (start >= 0 && end > start && end <= len) {
+    const snippet2 = text.slice(start, end);
+    return snippet2 ? { start, end, snippet: snippet2 } : null;
+  }
+  const startByUtf8 = utf8OffsetToIndex(text, start);
+  const endByUtf8 = utf8OffsetToIndex(text, end);
+  const normalizedStart = clamp(startByUtf8, 0, len);
+  let normalizedEnd = clamp(Math.max(endByUtf8, normalizedStart + 1), 0, len);
+  if (normalizedEnd <= normalizedStart) {
+    normalizedEnd = Math.min(len, normalizedStart + 1);
+  }
+  const snippet = text.slice(normalizedStart, normalizedEnd);
+  return snippet ? { start: normalizedStart, end: normalizedEnd, snippet } : null;
+}
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+function utf8OffsetToIndex(text, utf8Offset) {
+  if (utf8Offset <= 0) {
+    return 0;
+  }
+  let acc = 0;
+  for (let i = 0; i < text.length; i++) {
+    const bytes = Buffer.byteLength(text[i], "utf8");
+    if (acc + bytes > utf8Offset) {
+      return i;
+    }
+    acc += bytes;
+  }
+  return text.length;
 }
 
 // src/main.ts
@@ -3050,22 +3084,35 @@ var DEFAULT_SETTINGS = {
   endpoint: "",
   includeGlobs: ["**/*.md"],
   ignoreEnglish: true,
-  debounceMs: 500
+  debounceMs: 1200,
+  cooldownMs: 5e3,
+  analysisTrigger: "realtime"
 };
 var diagnosticsEffect = import_state.StateEffect.define();
+var BKGA_ISSUES_VIEW_TYPE = "bkga-issues-view";
 var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
     this.diagnostics = /* @__PURE__ */ new Map();
+    this.diagnosticsListeners = /* @__PURE__ */ new Set();
     this.cmViews = /* @__PURE__ */ new Set();
     this.statusBarEl = null;
     this.pendingTimers = /* @__PURE__ */ new Map();
+    this.latestRunToken = /* @__PURE__ */ new Map();
+    this.lastRunAt = /* @__PURE__ */ new Map();
+    this.disabledCategories = /* @__PURE__ */ new Set();
+    this.lastContent = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
     this.statusBarEl = this.addStatusBarItem();
+    this.statusBarEl.addClass("bkga-status");
+    this.statusBarEl.addEventListener("click", () => {
+      void this.openIssuesView();
+    });
     this.updateStatus("Idle");
+    this.registerView(BKGA_ISSUES_VIEW_TYPE, (leaf) => new BkgaIssuesView(leaf, this));
     this.registerEditorExtension(createDecorationExtension(this));
     this.addSettingTab(new BkgaSettingTab(this.app, this));
     this.addCommand({
@@ -3075,8 +3122,18 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
         void this.runActiveAnalysis(true);
       }
     });
+    this.addCommand({
+      id: "bkga-open-issues",
+      name: "Show BKGA issues panel",
+      callback: () => {
+        void this.openIssuesView();
+      }
+    });
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, view) => {
+        if (this.settings.analysisTrigger !== "realtime") {
+          return;
+        }
         if (view instanceof import_obsidian.MarkdownView && view.file) {
           this.queueAnalysis(view.file, editor);
         }
@@ -3084,6 +3141,9 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
+        if (this.settings.analysisTrigger !== "realtime") {
+          return;
+        }
         if (file) {
           void this.runAnalysisForFile(file, false);
         }
@@ -3091,17 +3151,25 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
+        if (this.settings.analysisTrigger !== "realtime") {
+          return;
+        }
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (view?.file) {
           void this.runAnalysisForFile(view.file, false);
         }
       })
     );
-    await this.runActiveAnalysis(false);
+    if (this.settings.analysisTrigger === "realtime") {
+      await this.runActiveAnalysis(false);
+    } else {
+      this.updateStatus("Manual");
+    }
   }
   onunload() {
     this.pendingTimers.forEach((timer) => window.clearTimeout(timer));
     this.pendingTimers.clear();
+    this.app.workspace.detachLeavesOfType(BKGA_ISSUES_VIEW_TYPE);
   }
   trackEditorView(view) {
     this.cmViews.add(view);
@@ -3113,12 +3181,60 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     for (const view of this.cmViews) {
       view.dispatch({ effects: diagnosticsEffect.of(null) });
     }
+    for (const listener of this.diagnosticsListeners) {
+      listener();
+    }
   }
   getDiagnostics(path) {
     return this.diagnostics.get(path) ?? [];
   }
+  getCachedContent(path) {
+    return this.lastContent.get(path) ?? null;
+  }
+  onDiagnosticsChanged(listener) {
+    this.diagnosticsListeners.add(listener);
+    return () => this.diagnosticsListeners.delete(listener);
+  }
+  isStaleRun(path, token) {
+    return this.latestRunToken.get(path) !== token;
+  }
+  isCategoryEnabled(issue) {
+    const key = categoryKey(issue.category);
+    return !this.disabledCategories.has(key);
+  }
+  isCategoryKeyEnabled(key) {
+    return !this.disabledCategories.has(key);
+  }
+  toggleCategory(key) {
+    if (this.disabledCategories.has(key)) {
+      this.disabledCategories.delete(key);
+    } else {
+      this.disabledCategories.add(key);
+    }
+    this.signalDiagnosticsChanged();
+  }
+  resetCategoryFilters() {
+    if (this.disabledCategories.size === 0) {
+      return;
+    }
+    this.disabledCategories.clear();
+    this.signalDiagnosticsChanged();
+  }
+  async openIssuesView() {
+    const existing = this.app.workspace.getLeavesOfType(BKGA_ISSUES_VIEW_TYPE)[0];
+    const targetLeaf = existing ?? this.app.workspace.getRightLeaf(false);
+    if (!targetLeaf) {
+      new import_obsidian.Notice("Unable to open BKGA issues view.");
+      return;
+    }
+    await targetLeaf.setViewState({ type: BKGA_ISSUES_VIEW_TYPE, active: true });
+    this.app.workspace.revealLeaf(targetLeaf);
+  }
   queueAnalysis(file, editor) {
     if (!this.shouldAnalyze(file)) {
+      return;
+    }
+    if (this.settings.analysisTrigger !== "realtime") {
       return;
     }
     const path = file.path;
@@ -3126,10 +3242,15 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     if (existing) {
       window.clearTimeout(existing);
     }
+    const now = Date.now();
+    const debounceTarget = now + this.settings.debounceMs;
+    const cooldownTarget = (this.lastRunAt.get(path) ?? 0) + this.settings.cooldownMs;
+    const due = Math.max(debounceTarget, cooldownTarget);
+    const delay = Math.max(0, due - now);
     const timer = window.setTimeout(() => {
       this.pendingTimers.delete(path);
       this.runAnalysis(path, editor.getValue()).catch((err) => console.error("[BKGA] Analysis failed", err));
-    }, this.settings.debounceMs);
+    }, delay);
     this.pendingTimers.set(path, timer);
   }
   async runActiveAnalysis(showNotice) {
@@ -3149,6 +3270,10 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     await this.runAnalysis(file.path, text, showNotice);
   }
   async runAnalysis(path, text, showNotice = false) {
+    const runToken = (this.latestRunToken.get(path) ?? 0) + 1;
+    this.latestRunToken.set(path, runToken);
+    this.lastContent.set(path, text);
+    this.lastRunAt.set(path, Date.now());
     if (!this.settings.enabled) {
       this.clearDiagnostics(path);
       this.updateStatus("Disabled");
@@ -3161,7 +3286,9 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
       let issues = [];
       if (!apiKey) {
         issues = buildLocalHeuristics(text);
-        this.updateStatus("API key required (local)");
+        if (!this.isStaleRun(path, runToken)) {
+          this.updateStatus("API key required (local)");
+        }
         if (showNotice) {
           new import_obsidian.Notice("Bareun API key missing; running local heuristics only.");
         }
@@ -3170,21 +3297,29 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
         issues = refineIssues(text, raw, { ignoreEnglish: this.settings.ignoreEnglish });
         if (issues.length) {
           const label = issues.length === 1 ? "1 issue" : `${issues.length} issues`;
-          this.updateStatus(label);
+          if (!this.isStaleRun(path, runToken)) {
+            this.updateStatus(label);
+          }
         } else {
-          this.updateStatus("No issues");
+          if (!this.isStaleRun(path, runToken)) {
+            this.updateStatus("No issues");
+          }
         }
       }
-      this.diagnostics.set(path, issues);
-      this.signalDiagnosticsChanged();
+      if (!this.isStaleRun(path, runToken)) {
+        this.diagnostics.set(path, issues);
+        this.signalDiagnosticsChanged();
+      }
     } catch (err) {
       console.error("[BKGA] Bareun analysis error", err);
-      const fallback = buildLocalHeuristics(text);
-      this.diagnostics.set(path, fallback);
-      this.signalDiagnosticsChanged();
-      this.updateStatus("API error (local)");
-      if (showNotice) {
-        new import_obsidian.Notice("Bareun API request failed; showing local heuristics.");
+      if (!this.isStaleRun(path, runToken)) {
+        const fallback = buildLocalHeuristics(text);
+        this.diagnostics.set(path, fallback);
+        this.signalDiagnosticsChanged();
+        this.updateStatus("API error (local)");
+        if (showNotice) {
+          new import_obsidian.Notice("Bareun API request failed; showing local heuristics.");
+        }
       }
     }
   }
@@ -3208,11 +3343,217 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    const loaded = await this.loadData();
+    const loaded = await this.loadData() ?? {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
   }
   async saveBkgaSettings() {
     await this.saveData(this.settings);
+  }
+};
+var BkgaIssuesView = class extends import_obsidian.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.cleanup = [];
+    this.lastEditor = null;
+    this.lastFilePath = null;
+    this.lastRenderedPath = null;
+  }
+  getViewType() {
+    return BKGA_ISSUES_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "BKGA Issues";
+  }
+  getIcon() {
+    return "spell-check";
+  }
+  async onOpen() {
+    this.cleanup.push(this.plugin.onDiagnosticsChanged(() => this.renderIssues()));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        const activePath = this.app.workspace.getActiveFile()?.path ?? null;
+        if (activePath === this.lastRenderedPath) {
+          return;
+        }
+        this.renderIssues();
+      })
+    );
+    this.renderIssues();
+  }
+  async onClose() {
+    this.cleanup.forEach((fn) => fn());
+    this.cleanup = [];
+  }
+  renderIssues() {
+    const container = this.containerEl;
+    container.empty();
+    container.addClass("bkga-issues-view");
+    const file = this.app.workspace.getActiveFile();
+    this.lastRenderedPath = file?.path ?? null;
+    const issues = file ? this.plugin.getDiagnostics(file.path).filter((i) => this.plugin.isCategoryEnabled(i)) : [];
+    const mdView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    const editor = mdView?.editor;
+    const cachedContent = file ? this.plugin.getCachedContent(file.path) : null;
+    this.lastEditor = editor ?? null;
+    this.lastFilePath = file?.path ?? null;
+    if (!file) {
+      container.createDiv({ cls: "bkga-empty", text: "Open a Markdown note to see BKGA issues." });
+      return;
+    }
+    const header = container.createDiv({ cls: "bkga-issues-header" });
+    header.createDiv({ cls: "bkga-issues-title", text: file.name });
+    header.createDiv({
+      cls: "bkga-issues-count",
+      text: issues.length ? `${issues.length} issue${issues.length > 1 ? "s" : ""}` : "No issues"
+    });
+    const legend = container.createDiv({ cls: "bkga-issues-legend" });
+    [
+      { cat: "TYPO", cls: "bkga-spelling" },
+      { cat: "SPACING", cls: "bkga-spacing" },
+      { cat: "STANDARD", cls: "bkga-standard" },
+      { cat: "STATISTICAL", cls: "bkga-statistical" },
+      { cat: "DEFAULT", cls: "bkga-default" }
+    ].forEach((entry) => {
+      const active = this.plugin.isCategoryKeyEnabled(categoryKey(entry.cat));
+      const badge = legend.createSpan({
+        cls: `bkga-badge ${entry.cls} ${active ? "" : "inactive"}`,
+        text: categoryLabel(entry.cat)
+      });
+      badge.setAttr("title", `${categoryTooltip(entry.cat)} (click to toggle)`);
+      badge.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        this.plugin.toggleCategory(categoryKey(entry.cat));
+        this.renderIssues();
+      });
+    });
+    const reset = legend.createSpan({
+      cls: "bkga-reset",
+      text: "\uBAA8\uB450 \uD45C\uC2DC"
+    });
+    reset.setAttr("title", "\uC228\uAE34 \uCE74\uD14C\uACE0\uB9AC\uB97C \uBAA8\uB450 \uB2E4\uC2DC \uD45C\uC2DC");
+    reset.addEventListener("mousedown", (evt) => {
+      evt.preventDefault();
+      this.plugin.resetCategoryFilters();
+      this.renderIssues();
+    });
+    if (!issues.length) {
+      container.createDiv({ cls: "bkga-empty", text: "This note has no BKGA issues." });
+      return;
+    }
+    const list = container.createDiv({ cls: "bkga-issues-list" });
+    issues.forEach((issue, idx) => {
+      const item = list.createDiv({ cls: "bkga-issue-item" });
+      const title = item.createDiv({ cls: "bkga-issue-title" });
+      title.createSpan({ cls: "bkga-issue-index", text: `${idx + 1}.` });
+      const badge = title.createSpan({
+        cls: `bkga-badge ${categoryToClass(issue.category)}`,
+        text: categoryLabel(issue.category)
+      });
+      badge.setAttr("title", categoryTooltip(issue.category));
+      title.createSpan({
+        cls: "bkga-issue-message",
+        text: issue.message || categoryLabel(issue.category)
+      });
+      const position = this.formatPosition(editor, cachedContent, issue.start, issue.end);
+      if (position) {
+        title.createSpan({ cls: "bkga-issue-pos", text: position });
+      }
+      if (issue.snippet) {
+        const origEl = item.createDiv({ cls: "bkga-issue-suggestion-row" });
+        origEl.createSpan({ cls: "bkga-issue-suggestion-label", text: "\uAE30\uC874:" });
+        origEl.createSpan({ cls: "bkga-issue-suggestion-text", text: issue.snippet });
+      }
+      if (issue.suggestion && issue.suggestion !== "") {
+        const suggestionEl = item.createDiv({ cls: "bkga-issue-suggestion-row" });
+        suggestionEl.createSpan({ cls: "bkga-issue-suggestion-label", text: "\uC81C\uC548:" });
+        suggestionEl.createSpan({ cls: "bkga-issue-suggestion-text", text: issue.suggestion });
+        const applyBtn = suggestionEl.createEl("button", { cls: "bkga-apply-btn", text: "\uC801\uC6A9" });
+        applyBtn.addEventListener("mousedown", (evt) => {
+          evt.preventDefault();
+          this.applySuggestion(issue);
+        });
+      }
+      item.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        this.jumpToIssue(issue);
+      });
+    });
+  }
+  formatPosition(editor, cached, start, end) {
+    if (editor) {
+      const docLength = editor.getValue().length;
+      const from = editor.offsetToPos(clamp2(start, 0, docLength));
+      const to = editor.offsetToPos(clamp2(end, 0, docLength));
+      const main = `L${from.line + 1}:${from.ch + 1}`;
+      const suffix = to.line !== from.line || to.ch !== from.ch ? `-L${to.line + 1}:${to.ch + 1}` : "";
+      return main + suffix;
+    }
+    if (cached) {
+      const info = offsetToLineCol(cached, start, end);
+      if (info) {
+        const main = `L${info.from.line}:${info.from.ch}`;
+        const suffix = info.to.line !== info.from.line || info.to.ch !== info.from.ch ? `-L${info.to.line}:${info.to.ch}` : "";
+        return main + suffix;
+      }
+    }
+    return "";
+  }
+  jumpToIssue(issue) {
+    const editor = this.resolveEditor();
+    if (!editor) {
+      new import_obsidian.Notice("Open the note in edit mode to jump to the issue.");
+      return;
+    }
+    const docLength = editor.getValue().length;
+    const fromOffset = clamp2(issue.start, 0, docLength);
+    const toOffset = Math.max(fromOffset + 1, clamp2(issue.end, 0, docLength));
+    const from = editor.offsetToPos(fromOffset);
+    const to = editor.offsetToPos(toOffset);
+    editor.focus();
+    editor.setSelection(from, to);
+    editor.scrollIntoView({ from, to }, true);
+  }
+  resolveEditor() {
+    if (this.lastEditor) {
+      return this.lastEditor;
+    }
+    if (!this.lastFilePath) {
+      return null;
+    }
+    let found = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (found) {
+        return;
+      }
+      const view = leaf.view;
+      if (view instanceof import_obsidian.MarkdownView && view.file?.path === this.lastFilePath) {
+        found = view.editor;
+      }
+    });
+    return found;
+  }
+  applySuggestion(issue) {
+    const editor = this.resolveEditor();
+    if (!editor) {
+      new import_obsidian.Notice("\uD3B8\uC9D1 \uAC00\uB2A5\uD55C \uB178\uD2B8\uC5D0\uC11C\uB9CC \uC81C\uC548\uC744 \uC801\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    if (!issue.suggestion) {
+      return;
+    }
+    const docLength = editor.getValue().length;
+    const fromOffset = clamp2(issue.start, 0, docLength);
+    const toOffset = clamp2(issue.end, 0, docLength);
+    const to = Math.max(fromOffset, toOffset);
+    const from = Math.min(fromOffset, toOffset);
+    editor.replaceRange(issue.suggestion, editor.offsetToPos(from), editor.offsetToPos(to));
+    const newPos = editor.offsetToPos(from + issue.suggestion.length);
+    editor.setCursor(newPos);
+    const file = this.app.workspace.getActiveFile();
+    if (file) {
+      void this.plugin.runAnalysisForFile(file, false);
+    }
   }
 };
 var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -3231,7 +3572,9 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
         if (!value) {
           this.plugin.updateStatus("Disabled");
         } else {
-          this.plugin.updateStatus("Idle");
+          this.plugin.updateStatus(
+            this.plugin.settings.analysisTrigger === "realtime" ? "Idle" : "Manual"
+          );
         }
       })
     );
@@ -3259,12 +3602,30 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Auto-analysis delay (ms)").setDesc("Lower values trigger checks sooner after edits.").addSlider(
+    new import_obsidian.Setting(containerEl).setName("Auto-analysis delay (ms)").setDesc("Lower values trigger checks sooner after edits (realtime mode).").addSlider(
       (slider) => slider.setLimits(200, 2e3, 50).setValue(this.plugin.settings.debounceMs).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.debounceMs = value;
         await this.plugin.saveBkgaSettings();
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Cooldown between analyses (ms)").setDesc("Minimum gap between API calls per note (realtime mode).").addSlider(
+      (slider) => slider.setLimits(1e3, 2e4, 500).setValue(this.plugin.settings.cooldownMs).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.cooldownMs = value;
+        await this.plugin.saveBkgaSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Analysis mode").setDesc("Realtime = auto on edits; Manual = run only via command.").addDropdown((dropdown) => {
+      dropdown.addOption("realtime", "Realtime (auto)");
+      dropdown.addOption("manual", "Manual (command only)");
+      dropdown.setValue(this.plugin.settings.analysisTrigger);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.analysisTrigger = value;
+        await this.plugin.saveBkgaSettings();
+        this.plugin.updateStatus(
+          this.plugin.settings.analysisTrigger === "realtime" ? "Idle" : "Manual"
+        );
+      });
+    });
   }
 };
 function createDecorationExtension(plugin) {
@@ -3272,11 +3633,23 @@ function createDecorationExtension(plugin) {
     class {
       constructor(view) {
         this.view = view;
+        this.lastFilePath = null;
         plugin.trackEditorView(view);
         this.decorations = this.buildDecorations();
       }
       update(update) {
-        if (update.docChanged || update.viewportChanged || update.transactions.some((tr) => tr.effects.some((e) => e.is(diagnosticsEffect)))) {
+        const currentPath = getFilePath(this.view);
+        if (currentPath !== this.lastFilePath) {
+          this.decorations = this.buildDecorations();
+          return;
+        }
+        const diagnosticsChanged = update.transactions.some(
+          (tr) => tr.effects.some((e) => e.is(diagnosticsEffect))
+        );
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes);
+        }
+        if (diagnosticsChanged) {
           this.decorations = this.buildDecorations();
         }
       }
@@ -3286,29 +3659,32 @@ function createDecorationExtension(plugin) {
       buildDecorations() {
         const filePath = getFilePath(this.view);
         if (!filePath) {
+          this.lastFilePath = null;
           return import_view.Decoration.none;
         }
-        const issues = plugin.getDiagnostics(filePath);
+        const issues = plugin.getDiagnostics(filePath).filter((i) => plugin.isCategoryEnabled(i));
         if (!issues.length) {
+          this.lastFilePath = filePath;
           return import_view.Decoration.none;
         }
         const builder = new import_state.RangeSetBuilder();
         const docLength = this.view.state.doc.length;
-        for (const issue of issues) {
-          const from = clamp(issue.start, 0, docLength);
-          const to = clamp(issue.end, 0, docLength);
-          if (to <= from) {
-            continue;
-          }
+        const sorted = issues.map((iss) => {
+          const from = clamp2(iss.start, 0, docLength);
+          const to = clamp2(iss.end, 0, docLength);
+          return { iss, from, to };
+        }).filter((item) => item.to > item.from).sort((a, b) => a.from - b.from !== 0 ? a.from - b.from : a.to - b.to);
+        for (const { iss, from, to } of sorted) {
           const deco = import_view.Decoration.mark({
-            class: `bkga-underline ${categoryToClass(issue.category)}`,
+            class: `bkga-underline ${categoryToClass(iss.category)}`,
             attributes: {
-              title: issue.suggestion && issue.suggestion !== "" ? `${issue.message}
-Suggestion: ${issue.suggestion}` : issue.message
+              title: iss.suggestion && iss.suggestion !== "" ? `${iss.message}
+Suggestion: ${iss.suggestion}` : iss.message
             }
           });
           builder.add(from, to, deco);
         }
+        this.lastFilePath = filePath;
         return builder.finish();
       }
     },
@@ -3317,7 +3693,7 @@ Suggestion: ${issue.suggestion}` : issue.message
     }
   );
 }
-function clamp(value, min, max) {
+function clamp2(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 function categoryToClass(category) {
@@ -3336,9 +3712,82 @@ function categoryToClass(category) {
   }
   return "bkga-default";
 }
+function categoryKey(category) {
+  const normalized = (category || "").toUpperCase();
+  if (normalized.includes("SPELLING") || normalized.includes("\uB9DE\uCDA4\uBC95") || normalized.includes("TYPO")) {
+    return "TYPO";
+  }
+  if (normalized.includes("SPACING") || normalized.includes("\uB744\uC5B4\uC4F0\uAE30")) {
+    return "SPACING";
+  }
+  if (normalized.includes("STANDARD") || normalized.includes("\uD45C\uC900\uC5B4")) {
+    return "STANDARD";
+  }
+  if (normalized.includes("STATISTICAL") || normalized.includes("\uD1B5\uACC4")) {
+    return "STATISTICAL";
+  }
+  return "DEFAULT";
+}
+function categoryLabel(category) {
+  const normalized = (category || "").toUpperCase();
+  if (normalized.includes("SPELLING") || normalized.includes("\uB9DE\uCDA4\uBC95") || normalized.includes("TYPO")) {
+    return "\uB9DE\uCDA4\uBC95";
+  }
+  if (normalized.includes("SPACING") || normalized.includes("\uB744\uC5B4\uC4F0\uAE30")) {
+    return "\uB744\uC5B4\uC4F0\uAE30";
+  }
+  if (normalized.includes("STANDARD") || normalized.includes("\uD45C\uC900\uC5B4")) {
+    return "\uD45C\uC900\uC5B4";
+  }
+  if (normalized.includes("STATISTICAL") || normalized.includes("\uD1B5\uACC4")) {
+    return "\uD1B5\uACC4";
+  }
+  return "\uAE30\uD0C0";
+}
+function categoryTooltip(category) {
+  const normalized = (category || "").toUpperCase();
+  if (normalized.includes("SPELLING") || normalized.includes("\uB9DE\uCDA4\uBC95") || normalized.includes("TYPO")) {
+    return "\uB9DE\uCDA4\uBC95/\uC624\uD0C0";
+  }
+  if (normalized.includes("SPACING") || normalized.includes("\uB744\uC5B4\uC4F0\uAE30")) {
+    return "\uB744\uC5B4\uC4F0\uAE30";
+  }
+  if (normalized.includes("STANDARD") || normalized.includes("\uD45C\uC900\uC5B4")) {
+    return "\uD45C\uC900\uC5B4";
+  }
+  if (normalized.includes("STATISTICAL") || normalized.includes("\uD1B5\uACC4")) {
+    return "\uD1B5\uACC4\uC801 \uC81C\uC548";
+  }
+  return "\uAE30\uD0C0";
+}
 function getFilePath(view) {
   const info = view.state.field(import_obsidian.editorInfoField, false);
   return info?.file?.path ?? null;
+}
+function offsetToLineCol(text, start, end) {
+  if (start < 0 || end < 0 || start > text.length) {
+    return null;
+  }
+  const clampedStart = clamp2(start, 0, text.length);
+  const clampedEnd = clamp2(end, 0, text.length);
+  return {
+    from: offsetToPos(text, clampedStart),
+    to: offsetToPos(text, clampedEnd)
+  };
+}
+function offsetToPos(text, offset) {
+  let line = 0;
+  let ch = 0;
+  for (let i = 0; i < offset; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      line++;
+      ch = 0;
+    } else {
+      ch++;
+    }
+  }
+  return { line: line + 1, ch: ch + 1 };
 }
 /*! Bundled license information:
 
