@@ -1,6 +1,6 @@
 import * as https from 'https';
 import { URL } from 'url';
-import { BareunIssue, BareunResponse } from './constants';
+import { BareunIssue, BareunResponse, UpdateCustomDictionaryRequest } from './constants';
 
 export class BareunClient {
   static async analyze(endpoint: string, apiKey: string, text: string): Promise<BareunIssue[]> {
@@ -87,5 +87,62 @@ export class BareunClient {
       });
     }
     return issues;
+  }
+
+  static async updateCustomDictionary(
+    endpoint: string,
+    apiKey: string,
+    payload: UpdateCustomDictionaryRequest
+  ): Promise<boolean> {
+    if (!endpoint) {
+      console.warn('[BKGA] Custom dictionary endpoint is empty.');
+      return false;
+    }
+    if (!apiKey) {
+      console.warn('[BKGA] Custom dictionary API key missing.');
+      return false;
+    }
+
+    try {
+      const url = new URL(endpoint);
+      const body = JSON.stringify(payload);
+      const options: https.RequestOptions = {
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port ? Number(url.port) : 443,
+        path: url.pathname + (url.search || ''),
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': apiKey,
+          'Content-Length': Buffer.byteLength(body).toString(),
+          'User-Agent': 'BKGA-Obsidian/0.1',
+        },
+        rejectUnauthorized: false,
+      };
+
+      return await new Promise<boolean>((resolve) => {
+        const req = https.request(options, (res) => {
+          res.on('data', () => undefined);
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve(true);
+            } else {
+              resolve(false);
+            }
+          });
+        });
+
+        req.on('error', () => resolve(false));
+        req.setTimeout(8000, () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.write(body);
+        req.end();
+      });
+    } catch (err) {
+      console.error('[BKGA] Custom dictionary request failed', err);
+      return false;
+    }
   }
 }

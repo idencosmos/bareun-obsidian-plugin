@@ -80,6 +80,51 @@
   font-weight: 600;
 }
 
+.bkga-dict-status {
+  color: var(--text-muted);
+}
+
+.bkga-dict-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.bkga-dict-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bkga-dict-form input {
+  flex: 1;
+}
+
+.bkga-dict-section {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.bkga-dict-section-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.bkga-dict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bkga-dict-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
 .bkga-issue-item {
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
@@ -154,6 +199,40 @@
 
 .bkga-apply-btn:hover {
   background: var(--interactive-hover);
+}
+
+.bkga-tooltip {
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  color: var(--text-normal);
+  max-width: 320px;
+  box-shadow: var(--shadow-s);
+}
+
+.bkga-tooltip-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.bkga-tooltip-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.bkga-tooltip-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.bkga-tooltip-text {
+  background: var(--background-primary-alt);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .bkga-badge.bkga-spelling {
