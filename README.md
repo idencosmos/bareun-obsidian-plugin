@@ -54,18 +54,19 @@ Bareun NLP Revision API를 이용해 Markdown 노트의 맞춤법·띄어쓰기�
 ```bash
 cd obsidian-plugin
 npm install
+npm run lint   # eslint-plugin-obsidianmd 기준으로 전체 검증
 npm run build
 ```
 
 - `npm run build` 후 생성되는 `main.js`, `main.js.map`을 릴리스에 포함하세요.
 - `node_modules` 디렉터리는 릴리스에 포함하지 않습니다.
 - Obsidian에 로드할 때 `manifest.json`, `main.js`, `main.js.map`, `styles.css` 네 파일이 필요합니다.
+- 릴리스 전에는 `npm run lint`로 ESLint 전체 검증을 항상 수행하세요.
 
 ## 라이선스 & 출처
-- 코드 전체는 MIT License 하에 배포됩니다 (`LICENSE` 참고).
-- VS Code 버전의 [smart-korean-grammar-assistant](https://github.com/Hun-Bot2/smart-korean-grammar-assistant) 프로젝트를 기반으로 Obsidian API에 맞게 재작성했습니다.  
-  - 원본 저작권: © 2025 Hun-Bot2  
-  - MIT License 조건에 따라 저작권/라이선스 고지를 유지합니다.
+- 코드 전체는 MIT License 하에 배포됩니다 (`LICENSE` 참고, © 2025 Kwonhee Lee · idencosmos · Gurumii Lab).
+- VS Code 버전의 [smart-korean-grammar-assistant](https://github.com/Hun-Bot2/smart-korean-grammar-assistant) 프로젝트를 참고/포함하여 Obsidian API에 맞게 재작성했습니다.  
+  - 원본 저작권: © 2025 Hun-Bot2 (MIT), 조건에 따라 저작권/라이선스 고지를 유지합니다.
 - Bareun API 및 서비스 정책은 Bareun에 귀속되며, 해당 약관을 따르는 것은 사용자의 책임입니다.
 
 ## 릴리스 & 공식 등록 가이드

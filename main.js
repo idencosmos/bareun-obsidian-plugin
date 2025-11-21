@@ -3315,7 +3315,6 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   onunload() {
     this.pendingTimers.forEach((timer) => window.clearTimeout(timer));
     this.pendingTimers.clear();
-    this.app.workspace.detachLeavesOfType(BKGA_ISSUES_VIEW_TYPE);
   }
   trackEditorView(view) {
     this.cmViews.add(view);
@@ -3527,7 +3526,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_ISSUES_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(targetLeaf);
+    await this.app.workspace.revealLeaf(targetLeaf);
   }
   async openDictionaryView() {
     const existing = this.app.workspace.getLeavesOfType(BKGA_DICT_VIEW_TYPE)[0];
@@ -3537,7 +3536,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(targetLeaf);
+    await this.app.workspace.revealLeaf(targetLeaf);
   }
   async promptAddSelection(editor) {
     const targetEditor = editor ?? this.resolveMarkdownEditor();
@@ -3597,9 +3596,9 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     if (active?.editor) {
       return active.editor;
     }
-    const activeEditor = this.app.workspace.activeEditor?.editor;
-    if (activeEditor) {
-      return activeEditor;
+    const workspace = this.app.workspace;
+    if (workspace.activeEditor?.editor) {
+      return workspace.activeEditor.editor;
     }
     if (this.lastMarkdownEditor) {
       return this.lastMarkdownEditor;
@@ -3766,7 +3765,7 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
     return BKGA_ISSUES_VIEW_TYPE;
   }
   getDisplayText() {
-    return "BKGA Issues";
+    return "BKGA issues";
   }
   getIcon() {
     return "spell-check";
@@ -3991,7 +3990,7 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
     return BKGA_DICT_VIEW_TYPE;
   }
   getDisplayText() {
-    return "BKGA Custom Dictionary";
+    return "BKGA custom dictionary";
   }
   getIcon() {
     return "book";
@@ -4162,7 +4161,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Analysis mode").setDesc("Realtime = auto on edits; Manual = run only via command.").addDropdown((dropdown) => {
+    new import_obsidian.Setting(containerEl).setName("Analysis mode").setDesc("Realtime = auto on edits; manual = run only via command.").addDropdown((dropdown) => {
       dropdown.addOption("realtime", "Realtime (auto)");
       dropdown.addOption("manual", "Manual (command only)");
       dropdown.setValue(this.plugin.settings.analysisTrigger);
@@ -4175,7 +4174,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       });
     });
     new import_obsidian.Setting(containerEl).setName("Custom dictionary").setHeading();
-    new import_obsidian.Setting(containerEl).setName("Enable custom dictionary").setDesc("Sync your own words to Bareun custom dictionary.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Enable custom dictionary").setDesc("Sync your own words to the Bareun custom dictionary.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
         this.plugin.settings.customDictEnabled = value;
         await this.plugin.saveBkgaSettings();
@@ -4189,12 +4188,12 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     new import_obsidian.Setting(containerEl).setName("Custom dictionary domain").setDesc("Bareun custom dictionary domain name.").addText(
-      (text) => text.setPlaceholder("example-domain").setValue(this.plugin.settings.customDictDomain).onChange(async (value) => {
+      (text) => text.setPlaceholder("Example: example-domain").setValue(this.plugin.settings.customDictDomain).onChange(async (value) => {
         this.plugin.settings.customDictDomain = value.trim();
         await this.plugin.saveBkgaSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Hide issues present in custom dictionary").setDesc("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uB4F1\uB85D\uB41C \uB2E8\uC5B4\uB294 Issues/\uBC11\uC904\uC5D0\uC11C \uC228\uAE41\uB2C8\uB2E4.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Hide issues present in custom dictionary").setDesc("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uB4F1\uB85D\uB41C \uB2E8\uC5B4\uB294 issues/\uBC11\uC904\uC5D0\uC11C \uC228\uAE41\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.suppressDictIssues).onChange(async (value) => {
         this.plugin.settings.suppressDictIssues = value;
         await this.plugin.saveBkgaSettings();
@@ -4261,9 +4260,13 @@ var AddDictionaryWordModal = class extends import_obsidian.Modal {
       text.inputEl.focus();
     });
     new import_obsidian.Setting(contentEl).setName("\uC0AC\uC804 \uC885\uB958").setDesc("\uB2E8\uC5B4\uAC00 \uC18D\uD560 \uC0AC\uC6A9\uC790 \uC0AC\uC804 \uCE74\uD14C\uACE0\uB9AC\uB97C \uC120\uD0DD\uD558\uC138\uC694.").addDropdown((dropdown) => {
-      dictCategories.forEach((c) => dropdown.addOption(c.key, `${c.label} (${c.helper})`));
+      dictCategories.forEach((c) => {
+        dropdown.addOption(c.key, `${c.label} (${c.helper})`);
+      });
       dropdown.setValue(this.selectedKey);
-      dropdown.onChange((value) => this.selectedKey = value);
+      dropdown.onChange((value) => {
+        this.selectedKey = value;
+      });
     });
     const actions = contentEl.createDiv({ cls: "bkga-modal-actions" });
     const addBtn = actions.createEl("button", { cls: "bkga-apply-btn", text: "\uCD94\uAC00" });

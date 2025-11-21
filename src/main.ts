@@ -9,6 +9,7 @@ import {
   TFile,
   ItemView,
   WorkspaceLeaf,
+  Workspace,
   editorInfoField,
   Modal,
   SuggestModal,
@@ -61,6 +62,7 @@ type DictCategory = {
   type: 'WORD_LIST' | 'WORD_LIST_COMPOUND';
   subtitle: string;
 };
+type WorkspaceWithActiveEditor = Workspace & { activeEditor?: { editor?: Editor } };
 
 const DEFAULT_SETTINGS: BkgaSettings = {
   enabled: true,
@@ -265,7 +267,6 @@ export default class BareunObsidianPlugin extends Plugin {
   onunload() {
     this.pendingTimers.forEach((timer) => window.clearTimeout(timer));
     this.pendingTimers.clear();
-    this.app.workspace.detachLeavesOfType(BKGA_ISSUES_VIEW_TYPE);
   }
 
   trackEditorView(view: EditorView) {
@@ -510,7 +511,7 @@ export default class BareunObsidianPlugin extends Plugin {
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_ISSUES_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(targetLeaf);
+    await this.app.workspace.revealLeaf(targetLeaf);
   }
 
   async openDictionaryView() {
@@ -521,7 +522,7 @@ export default class BareunObsidianPlugin extends Plugin {
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(targetLeaf);
+    await this.app.workspace.revealLeaf(targetLeaf);
   }
 
   private async promptAddSelection(editor?: Editor) {
@@ -585,9 +586,9 @@ export default class BareunObsidianPlugin extends Plugin {
     if (active?.editor) {
       return active.editor;
     }
-    const activeEditor = (this.app.workspace as any).activeEditor?.editor as Editor | undefined;
-    if (activeEditor) {
-      return activeEditor;
+    const workspace = this.app.workspace as WorkspaceWithActiveEditor;
+    if (workspace.activeEditor?.editor) {
+      return workspace.activeEditor.editor;
     }
     if (this.lastMarkdownEditor) {
       return this.lastMarkdownEditor;
@@ -775,7 +776,7 @@ class BkgaIssuesView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'BKGA Issues';
+    return 'BKGA issues';
   }
 
   getIcon(): string {
@@ -1034,7 +1035,7 @@ class BkgaDictionaryView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'BKGA Custom Dictionary';
+    return 'BKGA custom dictionary';
   }
 
   getIcon(): string {
@@ -1192,6 +1193,7 @@ class BkgaSettingTab extends PluginSettingTab {
       .setDesc('Enter the API key issued at https://bareun.ai.')
       .addText((text) =>
         text
+          // eslint-disable-next-line obsidianmd/ui/sentence-case -- placeholder는 키 형태 그대로 표기
           .setPlaceholder('Example: bareun_abc123')
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
@@ -1269,7 +1271,7 @@ class BkgaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Analysis mode')
-      .setDesc('Realtime = auto on edits; Manual = run only via command.')
+      .setDesc('Realtime = auto on edits; manual = run only via command.')
       .addDropdown((dropdown) => {
         dropdown.addOption('realtime', 'Realtime (auto)');
         dropdown.addOption('manual', 'Manual (command only)');
@@ -1287,7 +1289,7 @@ class BkgaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Enable custom dictionary')
-      .setDesc('Sync your own words to Bareun custom dictionary.')
+      .setDesc('Sync your own words to the Bareun custom dictionary.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
           this.plugin.settings.customDictEnabled = value;
@@ -1314,7 +1316,7 @@ class BkgaSettingTab extends PluginSettingTab {
       .setDesc('Bareun custom dictionary domain name.')
       .addText((text) =>
         text
-          .setPlaceholder('example-domain')
+          .setPlaceholder('Example: example-domain')
           .setValue(this.plugin.settings.customDictDomain)
           .onChange(async (value) => {
             this.plugin.settings.customDictDomain = value.trim();
@@ -1324,7 +1326,7 @@ class BkgaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Hide issues present in custom dictionary')
-      .setDesc('사용자 사전에 등록된 단어는 Issues/밑줄에서 숨깁니다.')
+      .setDesc('사용자 사전에 등록된 단어는 issues/밑줄에서 숨깁니다.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.suppressDictIssues).onChange(async (value) => {
           this.plugin.settings.suppressDictIssues = value;
@@ -1410,9 +1412,13 @@ class AddDictionaryWordModal extends Modal {
       .setName('사전 종류')
       .setDesc('단어가 속할 사용자 사전 카테고리를 선택하세요.')
       .addDropdown((dropdown) => {
-        dictCategories.forEach((c) => dropdown.addOption(c.key, `${c.label} (${c.helper})`));
+        dictCategories.forEach((c) => {
+          dropdown.addOption(c.key, `${c.label} (${c.helper})`);
+        });
         dropdown.setValue(this.selectedKey);
-        dropdown.onChange((value) => (this.selectedKey = value as DictKey));
+        dropdown.onChange((value) => {
+          this.selectedKey = value as DictKey;
+        });
       });
 
     const actions = contentEl.createDiv({ cls: 'bkga-modal-actions' });

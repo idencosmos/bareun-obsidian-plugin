@@ -23,6 +23,7 @@ export default defineConfig([
         console: 'readonly',
         window: 'readonly',
         Buffer: 'readonly',
+        document: 'readonly',
       },
     },
     rules: {
@@ -30,6 +31,7 @@ export default defineConfig([
         'error',
         {
           allowAutoFix: true,
+          brands: ['BKGA', 'Bareun'],
         },
       ],
     },
