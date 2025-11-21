@@ -1,6 +1,6 @@
 {
   "name": "bareun-grammar-assistant-obsidian",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Bareun 기반 Obsidian 한국어 맞춤법 검사기",
   "private": true,
   "scripts": {

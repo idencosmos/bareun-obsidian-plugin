@@ -3139,17 +3139,53 @@ var DEFAULT_SETTINGS = {
   analysisTrigger: "realtime",
   customDictEnabled: false,
   customDictEndpoint: "",
-  customDictDomain: ""
+  customDictDomain: "",
+  suppressDictIssues: true
 };
 var diagnosticsEffect = import_state.StateEffect.define();
 var BKGA_ISSUES_VIEW_TYPE = "bkga-issues-view";
 var BKGA_DICT_VIEW_TYPE = "bkga-dict-view";
 var dictCategories = [
-  { key: "npSet", label: "\uACE0\uC720\uBA85\uC0AC", desc: "\uC778\uBA85, \uC791\uD488\uBA85 \uB4F1 \uB2E8\uC77C \uBA85\uC0AC" },
-  { key: "cpSet", label: "\uBCF5\uD569\uBA85\uC0AC", desc: "\uC5EC\uB7EC \uB2E8\uC5B4\uB85C \uAD6C\uC131\uB41C \uBCF5\uD569 \uBA85\uC0AC" },
-  { key: "cpCaretSet", label: "\uBCF5\uD569\uBA85\uC0AC \uBD84\uB9AC", desc: "^ \uB85C \uBD84\uB9AC\uB41C \uBCF5\uD569\uBA85\uC0AC" },
-  { key: "vvSet", label: "\uB3D9\uC0AC", desc: "\uC0C8\uB85C\uC6B4 \uB3D9\uC0AC/\uC6A9\uC5B8" },
-  { key: "vaSet", label: "\uD615\uC6A9\uC0AC", desc: "\uC0C8\uB85C\uC6B4 \uD615\uC6A9\uC0AC/\uD615\uC6A9\uC0AC\uC801 \uD45C\uD604" }
+  {
+    key: "npSet",
+    label: "\uACE0\uC720\uBA85\uC0AC",
+    desc: "\uC778\uBA85, \uC791\uD488\uBA85 \uB4F1 \uB2E8\uC77C \uBA85\uC0AC",
+    helper: "np_set \xB7 WORD_LIST",
+    type: "WORD_LIST",
+    subtitle: "\uB2E8\uC77C \uBA85\uC0AC (np_set)"
+  },
+  {
+    key: "cpSet",
+    label: "\uBCF5\uD569\uBA85\uC0AC",
+    desc: "\uC5EC\uB7EC \uB2E8\uC5B4\uB85C \uAD6C\uC131\uB41C \uBCF5\uD569 \uBA85\uC0AC",
+    helper: "cp_set \xB7 WORD_LIST",
+    type: "WORD_LIST",
+    subtitle: "\uBCF5\uD569 \uBA85\uC0AC (cp_set)"
+  },
+  {
+    key: "cpCaretSet",
+    label: "\uBCF5\uD569\uBA85\uC0AC \uBD84\uB9AC",
+    desc: "^ \uB85C \uBD84\uB9AC\uB41C \uBCF5\uD569\uBA85\uC0AC",
+    helper: "cp_caret_set \xB7 WORD_LIST_COMPOUND",
+    type: "WORD_LIST_COMPOUND",
+    subtitle: "\uBD84\uB9AC \uD45C\uAE30 \uBCF5\uD569 \uBA85\uC0AC (cp_caret_set)"
+  },
+  {
+    key: "vvSet",
+    label: "\uB3D9\uC0AC",
+    desc: "\uC0C8\uB85C\uC6B4 \uB3D9\uC0AC/\uC6A9\uC5B8",
+    helper: "vv_set \xB7 WORD_LIST",
+    type: "WORD_LIST",
+    subtitle: "\uB3D9\uC0AC (vv_set)"
+  },
+  {
+    key: "vaSet",
+    label: "\uD615\uC6A9\uC0AC",
+    desc: "\uC0C8\uB85C\uC6B4 \uD615\uC6A9\uC0AC/\uD615\uC6A9\uC0AC\uC801 \uD45C\uD604",
+    helper: "va_set \xB7 WORD_LIST",
+    type: "WORD_LIST",
+    subtitle: "\uD615\uC6A9\uC0AC (va_set)"
+  }
 ];
 function createEmptyDict() {
   return { npSet: [], cpSet: [], cpCaretSet: [], vvSet: [], vaSet: [] };
@@ -3160,6 +3196,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     this.settings = DEFAULT_SETTINGS;
     this.diagnostics = /* @__PURE__ */ new Map();
     this.diagnosticsListeners = /* @__PURE__ */ new Set();
+    this.dictionaryListeners = /* @__PURE__ */ new Set();
     this.cmViews = /* @__PURE__ */ new Set();
     this.statusBarEl = null;
     this.pendingTimers = /* @__PURE__ */ new Map();
@@ -3168,6 +3205,9 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     this.disabledCategories = /* @__PURE__ */ new Set();
     this.lastContent = /* @__PURE__ */ new Map();
     this.customDict = createEmptyDict();
+    this.lastDictSync = null;
+    this.lastMarkdownEditor = null;
+    this.lastMarkdownFile = null;
   }
   async onload() {
     await this.loadSettings();
@@ -3203,8 +3243,37 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
         void this.openDictionaryView();
       }
     });
+    this.addCommand({
+      id: "bkga-sync-custom-dictionary",
+      name: "Sync custom dictionary",
+      callback: () => {
+        void this.syncCustomDictionary(true);
+      }
+    });
+    this.addCommand({
+      id: "bkga-add-selection-to-custom-dictionary",
+      name: "Add selection to custom dictionary",
+      editorCallback: (editor) => {
+        void this.promptAddSelection(editor);
+      }
+    });
+    this.addCommand({
+      id: "bkga-add-word-to-custom-dictionary",
+      name: "Add word to custom dictionary",
+      callback: () => {
+        void this.promptAddWord();
+      }
+    });
+    this.addCommand({
+      id: "bkga-remove-word-from-custom-dictionary",
+      name: "Remove word from custom dictionary",
+      callback: () => {
+        void this.promptRemoveWord();
+      }
+    });
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, view) => {
+        this.rememberMarkdownEditor(view instanceof import_obsidian.MarkdownView ? view : null);
         if (this.settings.analysisTrigger !== "realtime") {
           return;
         }
@@ -3215,6 +3284,8 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
+        const mdView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        this.rememberMarkdownEditor(mdView ?? null);
         if (this.settings.analysisTrigger !== "realtime") {
           return;
         }
@@ -3225,6 +3296,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
+        this.rememberMarkdownEditor(this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView));
         if (this.settings.analysisTrigger !== "realtime") {
           return;
         }
@@ -3262,12 +3334,25 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   getDiagnostics(path) {
     return this.diagnostics.get(path) ?? [];
   }
+  getVisibleIssues(path) {
+    const issues = this.diagnostics.get(path) ?? [];
+    return issues.filter((i) => this.isCategoryEnabled(i) && this.passesDictFilter(i));
+  }
   getCachedContent(path) {
     return this.lastContent.get(path) ?? null;
   }
   onDiagnosticsChanged(listener) {
     this.diagnosticsListeners.add(listener);
     return () => this.diagnosticsListeners.delete(listener);
+  }
+  onDictionaryChanged(listener) {
+    this.dictionaryListeners.add(listener);
+    return () => this.dictionaryListeners.delete(listener);
+  }
+  signalDictionaryChanged() {
+    for (const listener of this.dictionaryListeners) {
+      listener();
+    }
   }
   isStaleRun(path, token) {
     return this.latestRunToken.get(path) !== token;
@@ -3294,8 +3379,88 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     this.disabledCategories.clear();
     this.signalDiagnosticsChanged();
   }
+  toggleDictSuppression() {
+    this.settings.suppressDictIssues = !this.settings.suppressDictIssues;
+    this.saveBkgaSettings().catch((err) => console.error("[BKGA] Failed to save settings", err));
+    this.signalDiagnosticsChanged();
+  }
   getDictionary() {
     return this.customDict;
+  }
+  getDictionaryEntries() {
+    const entries = [];
+    Object.keys(this.customDict).forEach((key) => {
+      for (const word of this.customDict[key]) {
+        entries.push({ key, word });
+      }
+    });
+    return entries;
+  }
+  lookupDictionary(word) {
+    const normalized = word.trim();
+    if (!normalized) return [];
+    const matches = [];
+    Object.keys(this.customDict).forEach((key) => {
+      if (this.customDict[key].includes(normalized)) {
+        matches.push(key);
+      }
+    });
+    return matches;
+  }
+  getDictionaryCount() {
+    return this.getDictionaryEntries().length;
+  }
+  getLastDictSync() {
+    return this.lastDictSync;
+  }
+  passesDictFilter(issue) {
+    if (!this.settings.customDictEnabled) {
+      return true;
+    }
+    if (!this.settings.suppressDictIssues) {
+      return true;
+    }
+    const key = categoryKey(issue.category);
+    if (key === "SPACING" || key === "STATISTICAL") {
+      return true;
+    }
+    const targetWords = [issue.snippet, issue.suggestion ?? ""];
+    return !targetWords.some((w) => {
+      const normalized = normalizeWord(w);
+      return normalized && this.lookupDictionary(normalized).length > 0;
+    });
+  }
+  async tryAutoSyncDict() {
+    if (!this.settings.customDictEnabled) {
+      return;
+    }
+    if (!this.settings.apiKey.trim() || !this.settings.customDictDomain.trim()) {
+      return;
+    }
+    await this.syncCustomDictionary(false);
+  }
+  getActiveSelection() {
+    const editor = this.resolveMarkdownEditor();
+    return editor?.getSelection() ?? "";
+  }
+  async promptAddWordFromText(text) {
+    const normalized = text.trim();
+    if (!normalized) {
+      new import_obsidian.Notice("\uCD94\uAC00\uD560 \uB2E8\uC5B4\uB97C \uC785\uB825\uD558\uAC70\uB098 \uC120\uD0DD\uD574\uC8FC\uC138\uC694.");
+      return;
+    }
+    const result = await new Promise((resolve) => {
+      const modal = new AddDictionaryWordModal(this.app, normalized, resolve);
+      modal.open();
+    });
+    if (!result) return;
+    if (this.addDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new import_obsidian.Notice(`"${result.word}"\uC774(\uAC00) ${meta?.label ?? result.key} \uC0AC\uC804\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`);
+      await this.tryAutoSyncDict();
+    } else {
+      new import_obsidian.Notice("\uC774\uBBF8 \uC874\uC7AC\uD558\uAC70\uB098 \uC798\uBABB\uB41C \uB2E8\uC5B4\uC785\uB2C8\uB2E4.");
+    }
   }
   addDictEntry(key, word) {
     const target = this.customDict[key];
@@ -3304,7 +3469,9 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
       return false;
     }
     target.push(normalized);
+    target.sort((a, b) => a.localeCompare(b, "ko"));
     this.saveBkgaSettings().catch((err) => console.error("[BKGA] Failed to save dict", err));
+    this.signalDictionaryChanged();
     return true;
   }
   removeDictEntry(key, word) {
@@ -3315,30 +3482,42 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     }
     target.splice(idx, 1);
     this.saveBkgaSettings().catch((err) => console.error("[BKGA] Failed to save dict", err));
+    this.signalDictionaryChanged();
     return true;
   }
-  async syncCustomDictionary(showNotice) {
+  async syncCustomDictionary(showNotice = true) {
+    const config = this.resolveCustomDictConfig(showNotice);
+    if (!config) {
+      return false;
+    }
+    const payload = buildCustomDictPayload(config.domain, this.customDict);
+    const ok = await BareunClient.updateCustomDictionary(config.endpoint, config.apiKey, payload);
+    if (ok) {
+      this.lastDictSync = Date.now();
+    }
+    if (showNotice) {
+      new import_obsidian.Notice(ok ? "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC774 \uB3D9\uAE30\uD654\uB418\uC5C8\uC2B5\uB2C8\uB2E4." : "\uC0AC\uC6A9\uC790 \uC0AC\uC804 \uB3D9\uAE30\uD654\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.");
+    }
+    this.signalDictionaryChanged();
+    return ok;
+  }
+  resolveCustomDictConfig(showNotice) {
     if (!this.settings.customDictEnabled) {
       if (showNotice) new import_obsidian.Notice("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
-      return false;
+      return null;
     }
     const apiKey = this.settings.apiKey.trim();
     if (!apiKey) {
       if (showNotice) new import_obsidian.Notice("Bareun API \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
-      return false;
+      return null;
     }
     const domain = this.settings.customDictDomain.trim();
     if (!domain) {
       if (showNotice) new import_obsidian.Notice("\uC0AC\uC6A9\uC790 \uC0AC\uC804 \uB3C4\uBA54\uC778\uC744 \uC124\uC815\uD574\uC8FC\uC138\uC694.");
-      return false;
+      return null;
     }
     const endpoint = (this.settings.customDictEndpoint || "").trim() || DEFAULT_BAREUN_CUSTOM_DICTIONARY_ENDPOINT;
-    const payload = buildCustomDictPayload(domain, this.customDict);
-    const ok = await BareunClient.updateCustomDictionary(endpoint, apiKey, payload);
-    if (showNotice) {
-      new import_obsidian.Notice(ok ? "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC774 \uB3D9\uAE30\uD654\uB418\uC5C8\uC2B5\uB2C8\uB2E4." : "\uC0AC\uC6A9\uC790 \uC0AC\uC804 \uB3D9\uAE30\uD654\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.");
-    }
-    return ok;
+    return { endpoint, apiKey, domain };
   }
   async openIssuesView() {
     const existing = this.app.workspace.getLeavesOfType(BKGA_ISSUES_VIEW_TYPE)[0];
@@ -3359,6 +3538,92 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
     this.app.workspace.revealLeaf(targetLeaf);
+  }
+  async promptAddSelection(editor) {
+    const targetEditor = editor ?? this.resolveMarkdownEditor();
+    if (!targetEditor) {
+      new import_obsidian.Notice("\uD3B8\uC9D1 \uC911\uC778 \uB9C8\uD06C\uB2E4\uC6B4 \uB178\uD2B8\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    const selection = targetEditor.getSelection();
+    const trimmed = selection.trim();
+    if (!trimmed) {
+      new import_obsidian.Notice("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uCD94\uAC00\uD560 \uD14D\uC2A4\uD2B8\uB97C \uC120\uD0DD\uD574\uC8FC\uC138\uC694.");
+      return;
+    }
+    await this.promptAddWordFromText(trimmed);
+  }
+  async promptAddWord(initialWord = "") {
+    const result = await new Promise((resolve) => {
+      const modal = new AddDictionaryWordModal(this.app, initialWord, resolve);
+      modal.open();
+    });
+    if (!result) {
+      return;
+    }
+    if (this.addDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new import_obsidian.Notice(
+        `"${result.word}"\uC774(\uAC00) ${meta?.label ?? result.key} \uC0AC\uC804\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`
+      );
+      await this.tryAutoSyncDict();
+    } else {
+      new import_obsidian.Notice("\uC774\uBBF8 \uC874\uC7AC\uD558\uAC70\uB098 \uC798\uBABB\uB41C \uB2E8\uC5B4\uC785\uB2C8\uB2E4.");
+    }
+  }
+  async promptRemoveWord() {
+    const entries = this.getDictionaryEntries();
+    if (!entries.length) {
+      new import_obsidian.Notice("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uC800\uC7A5\uB41C \uB2E8\uC5B4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    const result = await new Promise((resolve) => {
+      const modal = new DictEntryPickerModal(this.app, entries, resolve);
+      modal.open();
+    });
+    if (!result) {
+      return;
+    }
+    if (this.removeDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new import_obsidian.Notice(
+        `"${result.word}"\uC744(\uB97C) ${meta?.label ?? result.key} \uC0AC\uC804\uC5D0\uC11C \uC0AD\uC81C\uD588\uC2B5\uB2C8\uB2E4.`
+      );
+      await this.tryAutoSyncDict();
+    }
+  }
+  resolveMarkdownEditor() {
+    const active = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (active?.editor) {
+      return active.editor;
+    }
+    const activeEditor = this.app.workspace.activeEditor?.editor;
+    if (activeEditor) {
+      return activeEditor;
+    }
+    if (this.lastMarkdownEditor) {
+      return this.lastMarkdownEditor;
+    }
+    if (this.lastMarkdownFile) {
+      let found = null;
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (found) return;
+        const view = leaf.view;
+        if (view instanceof import_obsidian.MarkdownView && view.file?.path === this.lastMarkdownFile) {
+          found = view.editor;
+        }
+      });
+      if (found) return found;
+    }
+    let anyEditor = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (anyEditor) return;
+      const view = leaf.view;
+      if (view instanceof import_obsidian.MarkdownView && view.editor) {
+        anyEditor = view.editor;
+      }
+    });
+    return anyEditor;
   }
   queueAnalysis(file, editor) {
     if (!this.shouldAnalyze(file)) {
@@ -3385,6 +3650,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   }
   async runActiveAnalysis(showNotice) {
     const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    this.rememberMarkdownEditor(view ?? null);
     if (!view || !view.file) {
       return;
     }
@@ -3480,6 +3746,12 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
   async saveBkgaSettings() {
     await this.saveData({ settings: this.settings, customDict: this.customDict });
   }
+  rememberMarkdownEditor(view) {
+    if (view?.editor) {
+      this.lastMarkdownEditor = view.editor;
+      this.lastMarkdownFile = view.file?.path ?? null;
+    }
+  }
 };
 var BkgaIssuesView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
@@ -3522,7 +3794,7 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
     container.addClass("bkga-issues-view");
     const file = this.app.workspace.getActiveFile();
     this.lastRenderedPath = file?.path ?? null;
-    const issues = file ? this.plugin.getDiagnostics(file.path).filter((i) => this.plugin.isCategoryEnabled(i)) : [];
+    const issues = file ? this.plugin.getVisibleIssues(file.path) : [];
     const mdView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
     const editor = mdView?.editor;
     const cachedContent = file ? this.plugin.getCachedContent(file.path) : null;
@@ -3568,6 +3840,19 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
       this.plugin.resetCategoryFilters();
       this.renderIssues();
     });
+    const dictToggle = legend.createSpan({
+      cls: `bkga-badge bkga-default ${this.plugin.settings.suppressDictIssues ? "" : "inactive"}`,
+      text: "\uC0AC\uC804 \uC81C\uC678"
+    });
+    dictToggle.setAttr(
+      "title",
+      this.plugin.settings.suppressDictIssues ? "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uC788\uB294 \uB2E8\uC5B4 \uC228\uAE40 (\uD074\uB9AD\uD558\uC5EC \uD45C\uC2DC)" : "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uC788\uB294 \uB2E8\uC5B4 \uD45C\uC2DC \uC911 (\uD074\uB9AD\uD558\uC5EC \uC228\uAE40)"
+    );
+    dictToggle.addEventListener("mousedown", (evt) => {
+      evt.preventDefault();
+      this.plugin.toggleDictSuppression();
+      this.renderIssues();
+    });
     if (!issues.length) {
       container.createDiv({ cls: "bkga-empty", text: "This note has no BKGA issues." });
       return;
@@ -3605,6 +3890,15 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
           this.applySuggestion(issue);
         });
       }
+      const actionRow = item.createDiv({ cls: "bkga-issue-actions" });
+      const addDictBtn = actionRow.createEl("button", {
+        cls: "bkga-apply-btn secondary",
+        text: "\uC0AC\uC804\uC5D0 \uCD94\uAC00"
+      });
+      addDictBtn.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        void this.plugin.promptAddWordFromText(issue.snippet || issue.suggestion || "");
+      });
       item.addEventListener("mousedown", (evt) => {
         evt.preventDefault();
         this.jumpToIssue(issue);
@@ -3691,6 +3985,7 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this.cleanup = [];
   }
   getViewType() {
     return BKGA_DICT_VIEW_TYPE;
@@ -3702,9 +3997,12 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
     return "book";
   }
   async onOpen() {
+    this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
   }
   async onClose() {
+    this.cleanup.forEach((fn) => fn());
+    this.cleanup = [];
   }
   render() {
     const container = this.containerEl;
@@ -3715,18 +4013,52 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
     const controls = header.createDiv({ cls: "bkga-issues-count bkga-dict-actions" });
     const syncBtn = controls.createEl("button", { cls: "bkga-apply-btn", text: "\uB3D9\uAE30\uD654" });
     syncBtn.addEventListener("click", () => {
-      void this.plugin.syncCustomDictionary(true).then(() => this.render());
+      void this.plugin.syncCustomDictionary(true);
     });
+    const addSelectionBtn = controls.createEl("button", {
+      cls: "bkga-apply-btn secondary",
+      text: "\uC120\uD0DD \uCD94\uAC00"
+    });
+    addSelectionBtn.addEventListener("click", () => {
+      void this.plugin.promptAddSelection();
+    });
+    const enabled = this.plugin.settings.customDictEnabled;
+    const domain = this.plugin.settings.customDictDomain.trim() || "(\uBBF8\uC124\uC815)";
+    const endpoint = (this.plugin.settings.customDictEndpoint || "").trim() || DEFAULT_BAREUN_CUSTOM_DICTIONARY_ENDPOINT;
+    const total = this.plugin.getDictionaryCount();
+    const lastSync = this.plugin.getLastDictSync();
     const status = container.createDiv({ cls: "bkga-dict-status" });
-    status.setText(
-      this.plugin.settings.customDictEnabled ? `\uB3C4\uBA54\uC778: ${this.plugin.settings.customDictDomain || "(\uBBF8\uC124\uC815)"}` : "\uC0AC\uC6A9\uC790 \uC0AC\uC804 \uBE44\uD65C\uC131\uD654"
-    );
+    const chips = status.createDiv({ cls: "bkga-dict-chips" });
+    chips.createSpan({ cls: "bkga-dict-chip", text: enabled ? "\uD65C\uC131\uD654\uB428" : "\uBE44\uD65C\uC131\uD654" });
+    chips.createSpan({ cls: "bkga-dict-chip", text: `\uB3C4\uBA54\uC778: ${domain}` });
+    chips.createSpan({ cls: "bkga-dict-chip", text: `\uC5D4\uB4DC\uD3EC\uC778\uD2B8: ${endpoint}` });
+    chips.createSpan({ cls: "bkga-dict-chip", text: `\uCD1D \uB2E8\uC5B4: ${total}` });
+    chips.createSpan({
+      cls: "bkga-dict-chip",
+      text: lastSync ? `\uB9C8\uC9C0\uB9C9 \uB3D9\uAE30\uD654: ${new Date(lastSync).toLocaleString()}` : "\uC544\uC9C1 \uB3D9\uAE30\uD654\uB418\uC9C0 \uC54A\uC74C"
+    });
+    if (!enabled) {
+      container.createDiv({
+        cls: "bkga-callout warning",
+        text: "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4. \uC124\uC815\uC5D0\uC11C \uD65C\uC131\uD654\uD55C \uD6C4 \uB3D9\uAE30\uD654\uD558\uC138\uC694."
+      });
+    } else if (!this.plugin.settings.apiKey.trim() || !this.plugin.settings.customDictDomain.trim()) {
+      container.createDiv({
+        cls: "bkga-callout warning",
+        text: "API \uD0A4\uC640 \uC0AC\uC6A9\uC790 \uC0AC\uC804 \uB3C4\uBA54\uC778\uC744 \uC124\uC815\uD574\uC57C \uB3D9\uAE30\uD654\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
+      });
+    }
     const form = container.createDiv({ cls: "bkga-dict-form" });
+    form.createDiv({ cls: "bkga-dict-form-label", text: "\uBE60\uB978 \uCD94\uAC00" });
     const input = form.createEl("input", { type: "text", placeholder: "\uB2E8\uC5B4\uB97C \uC785\uB825\uD558\uC138\uC694" });
+    const autoSelection = this.plugin.getActiveSelection().trim();
+    if (autoSelection) {
+      input.value = autoSelection;
+    }
     const select = form.createEl("select");
     dictCategories.forEach((c) => {
-      const opt = select.createEl("option", { value: c.key, text: c.label });
-      opt.title = c.desc;
+      const opt = select.createEl("option", { value: c.key, text: `${c.label} (${c.helper})` });
+      opt.title = `${c.desc} \xB7 ${c.helper}`;
     });
     const addBtn = form.createEl("button", { cls: "bkga-apply-btn", text: "\uCD94\uAC00" });
     addBtn.addEventListener("click", (evt) => {
@@ -3740,7 +4072,7 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
       if (this.plugin.addDictEntry(key, word)) {
         new import_obsidian.Notice(`"${word}" \uCD94\uAC00\uB428`);
         input.value = "";
-        this.render();
+        void this.plugin.tryAutoSyncDict();
       } else {
         new import_obsidian.Notice("\uC774\uBBF8 \uC874\uC7AC\uD558\uAC70\uB098 \uC798\uBABB\uB41C \uB2E8\uC5B4\uC785\uB2C8\uB2E4.");
       }
@@ -3748,9 +4080,12 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
     const dict = this.plugin.getDictionary();
     dictCategories.forEach((c) => {
       const section = container.createDiv({ cls: "bkga-dict-section" });
-      const title = section.createDiv({ cls: "bkga-dict-section-title" });
-      title.setText(c.label);
+      const head = section.createDiv({ cls: "bkga-dict-section-head" });
+      const title = head.createDiv({ cls: "bkga-dict-section-title" });
+      title.setText(`${c.label} (${dict[c.key].length})`);
       title.setAttr("title", c.desc);
+      head.createDiv({ cls: "bkga-dict-section-sub", text: c.helper });
+      section.createDiv({ cls: "bkga-dict-helper", text: c.desc });
       const list = section.createDiv({ cls: "bkga-dict-list" });
       const items = dict[c.key];
       if (!items.length) {
@@ -3759,10 +4094,10 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
         items.forEach((word) => {
           const row = list.createDiv({ cls: "bkga-dict-row" });
           row.createSpan({ text: word });
-          const del = row.createEl("button", { cls: "bkga-apply-btn", text: "\uC0AD\uC81C" });
+          const del = row.createEl("button", { cls: "bkga-apply-btn secondary", text: "\uC0AD\uC81C" });
           del.addEventListener("click", () => {
             this.plugin.removeDictEntry(c.key, word);
-            this.render();
+            void this.plugin.tryAutoSyncDict();
           });
         });
       }
@@ -3844,6 +4179,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       (toggle) => toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
         this.plugin.settings.customDictEnabled = value;
         await this.plugin.saveBkgaSettings();
+        this.plugin.signalDiagnosticsChanged();
       })
     );
     new import_obsidian.Setting(containerEl).setName("Custom dictionary endpoint").setDesc("Leave empty to use the default custom dictionary endpoint.").addText(
@@ -3858,6 +4194,98 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveBkgaSettings();
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Hide issues present in custom dictionary").setDesc("\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uB4F1\uB85D\uB41C \uB2E8\uC5B4\uB294 Issues/\uBC11\uC904\uC5D0\uC11C \uC228\uAE41\uB2C8\uB2E4.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.suppressDictIssues).onChange(async (value) => {
+        this.plugin.settings.suppressDictIssues = value;
+        await this.plugin.saveBkgaSettings();
+        this.plugin.signalDiagnosticsChanged();
+      })
+    );
+  }
+};
+var DictEntryPickerModal = class extends import_obsidian.SuggestModal {
+  constructor(app, entries, onPick) {
+    super(app);
+    this.entries = entries;
+    this.onPick = onPick;
+    this.resolved = false;
+    this.setPlaceholder("\uC0AD\uC81C\uD560 \uB2E8\uC5B4\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
+  }
+  getSuggestions(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      return this.entries;
+    }
+    return this.entries.filter((entry) => entry.word.toLowerCase().includes(q));
+  }
+  renderSuggestion(entry, el) {
+    const meta = dictCategories.find((c) => c.key === entry.key);
+    el.createDiv({ cls: "bkga-dict-suggest-title", text: entry.word });
+    el.createDiv({
+      cls: "bkga-dict-suggest-sub",
+      text: `${meta?.label ?? entry.key} \xB7 ${meta?.helper ?? ""}`.trim()
+    });
+  }
+  onChooseSuggestion(entry) {
+    this.resolved = true;
+    this.onPick(entry);
+  }
+  onClose() {
+    if (!this.resolved) {
+      this.onPick(null);
+    }
+  }
+};
+var AddDictionaryWordModal = class extends import_obsidian.Modal {
+  constructor(app, initialWord, onResult) {
+    super(app);
+    this.onResult = onResult;
+    this.selectedKey = "npSet";
+    this.submitted = false;
+    this.word = initialWord.trim();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "\uC0AC\uC6A9\uC790 \uC0AC\uC804\uC5D0 \uCD94\uAC00" });
+    new import_obsidian.Setting(contentEl).setName("\uB2E8\uC5B4").addText((text) => {
+      text.setPlaceholder("\uC608: \uC778\uACF5\uC9C0\uB2A5");
+      text.setValue(this.word);
+      text.onChange((value) => this.word = value);
+      text.inputEl.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter") {
+          evt.preventDefault();
+          this.submit();
+        }
+      });
+      text.inputEl.focus();
+    });
+    new import_obsidian.Setting(contentEl).setName("\uC0AC\uC804 \uC885\uB958").setDesc("\uB2E8\uC5B4\uAC00 \uC18D\uD560 \uC0AC\uC6A9\uC790 \uC0AC\uC804 \uCE74\uD14C\uACE0\uB9AC\uB97C \uC120\uD0DD\uD558\uC138\uC694.").addDropdown((dropdown) => {
+      dictCategories.forEach((c) => dropdown.addOption(c.key, `${c.label} (${c.helper})`));
+      dropdown.setValue(this.selectedKey);
+      dropdown.onChange((value) => this.selectedKey = value);
+    });
+    const actions = contentEl.createDiv({ cls: "bkga-modal-actions" });
+    const addBtn = actions.createEl("button", { cls: "bkga-apply-btn", text: "\uCD94\uAC00" });
+    addBtn.addEventListener("click", () => this.submit());
+    const cancel = actions.createEl("button", { cls: "bkga-apply-btn secondary", text: "\uCDE8\uC18C" });
+    cancel.addEventListener("click", () => this.close());
+  }
+  submit() {
+    const trimmed = this.word.trim();
+    if (!trimmed) {
+      new import_obsidian.Notice("\uB2E8\uC5B4\uB97C \uC785\uB825\uD558\uC138\uC694.");
+      return;
+    }
+    this.submitted = true;
+    this.onResult({ word: trimmed, key: this.selectedKey });
+    this.close();
+  }
+  onClose() {
+    if (!this.submitted) {
+      this.onResult(null);
+    }
+    this.contentEl.empty();
   }
 };
 function createDecorationExtension(plugin) {
@@ -3894,7 +4322,7 @@ function createDecorationExtension(plugin) {
           this.lastFilePath = null;
           return import_view.Decoration.none;
         }
-        const issues = plugin.getDiagnostics(filePath).filter((i) => plugin.isCategoryEnabled(i));
+        const issues = plugin.getVisibleIssues(filePath);
         if (!issues.length) {
           this.lastFilePath = filePath;
           return import_view.Decoration.none;
@@ -3908,11 +4336,7 @@ function createDecorationExtension(plugin) {
         }).filter((item) => item.to > item.from).sort((a, b) => a.from - b.from !== 0 ? a.from - b.from : a.to - b.to);
         for (const { iss, from, to } of sorted) {
           const deco = import_view.Decoration.mark({
-            class: `bkga-underline ${categoryToClass(iss.category)}`,
-            attributes: {
-              title: iss.suggestion && iss.suggestion !== "" ? `${iss.message}
-Suggestion: ${iss.suggestion}` : iss.message
-            }
+            class: `bkga-underline ${categoryToClass(iss.category)}`
           });
           builder.add(from, to, deco);
         }
@@ -3931,7 +4355,7 @@ function createHoverExtension(plugin) {
     if (!filePath) {
       return null;
     }
-    const issues = plugin.getDiagnostics(filePath).filter((i) => plugin.isCategoryEnabled(i));
+    const issues = plugin.getVisibleIssues(filePath);
     if (!issues.length) {
       return null;
     }
@@ -3983,6 +4407,33 @@ function createHoverExtension(plugin) {
           sug.appendChild(text);
           dom.appendChild(sug);
         }
+        const dictMatches = plugin.lookupDictionary(iss.snippet || "");
+        if (dictMatches.length) {
+          const dictEl = document.createElement("div");
+          dictEl.className = "bkga-tooltip-row";
+          const label = document.createElement("span");
+          label.className = "bkga-tooltip-label";
+          label.textContent = "\uC0AC\uC6A9\uC790 \uC0AC\uC804";
+          const text = document.createElement("span");
+          text.className = "bkga-tooltip-text";
+          const names = dictMatches.map((key) => dictCategories.find((c) => c.key === key)?.label || key).join(", ");
+          text.textContent = names;
+          dictEl.appendChild(label);
+          dictEl.appendChild(text);
+          dom.appendChild(dictEl);
+        }
+        const actions = document.createElement("div");
+        actions.className = "bkga-tooltip-actions";
+        const addBtn = document.createElement("button");
+        addBtn.className = "bkga-mini-btn";
+        addBtn.textContent = "\uC0AC\uC804\uC5D0 \uCD94\uAC00";
+        addBtn.addEventListener("click", (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          void plugin.promptAddWordFromText(iss.snippet || iss.suggestion || "");
+        });
+        actions.appendChild(addBtn);
+        dom.appendChild(actions);
         return { dom };
       }
     };
@@ -3990,6 +4441,9 @@ function createHoverExtension(plugin) {
 }
 function clamp2(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+function normalizeWord(text) {
+  return text.replace(/[`"'”“‘’\s]+/g, "").trim();
 }
 function categoryToClass(category) {
   const normalized = (category || "").toUpperCase();
@@ -4095,7 +4549,7 @@ function buildCustomDictPayload(domain, data) {
     dict: {
       domain_name: domain,
       np_set: toSet(data.npSet, "WORD_LIST"),
-      cp_set: toSet(data.cpSet, "WORD_LIST_COMPOUND"),
+      cp_set: toSet(data.cpSet, "WORD_LIST"),
       cp_caret_set: toSet(data.cpCaretSet, "WORD_LIST_COMPOUND"),
       vv_set: toSet(data.vvSet, "WORD_LIST"),
       va_set: toSet(data.vaSet, "WORD_LIST")

@@ -10,6 +10,8 @@ import {
   ItemView,
   WorkspaceLeaf,
   editorInfoField,
+  Modal,
+  SuggestModal,
 } from 'obsidian';
 import { StateEffect, RangeSetBuilder } from '@codemirror/state';
 import {
@@ -40,6 +42,7 @@ interface BkgaSettings {
   customDictEnabled: boolean;
   customDictEndpoint: string;
   customDictDomain: string;
+  suppressDictIssues: boolean;
 }
 
 type CustomDictionaryData = {
@@ -50,6 +53,14 @@ type CustomDictionaryData = {
   vaSet: string[];
 };
 type DictKey = keyof CustomDictionaryData;
+type DictCategory = {
+  key: DictKey;
+  label: string;
+  desc: string;
+  helper: string;
+  type: 'WORD_LIST' | 'WORD_LIST_COMPOUND';
+  subtitle: string;
+};
 
 const DEFAULT_SETTINGS: BkgaSettings = {
   enabled: true,
@@ -63,17 +74,53 @@ const DEFAULT_SETTINGS: BkgaSettings = {
   customDictEnabled: false,
   customDictEndpoint: '',
   customDictDomain: '',
+  suppressDictIssues: true,
 };
 
 const diagnosticsEffect = StateEffect.define<null>();
 const BKGA_ISSUES_VIEW_TYPE = 'bkga-issues-view';
 const BKGA_DICT_VIEW_TYPE = 'bkga-dict-view';
-const dictCategories: Array<{ key: DictKey; label: string; desc: string }> = [
-  { key: 'npSet', label: '고유명사', desc: '인명, 작품명 등 단일 명사' },
-  { key: 'cpSet', label: '복합명사', desc: '여러 단어로 구성된 복합 명사' },
-  { key: 'cpCaretSet', label: '복합명사 분리', desc: '^ 로 분리된 복합명사' },
-  { key: 'vvSet', label: '동사', desc: '새로운 동사/용언' },
-  { key: 'vaSet', label: '형용사', desc: '새로운 형용사/형용사적 표현' },
+const dictCategories: DictCategory[] = [
+  {
+    key: 'npSet',
+    label: '고유명사',
+    desc: '인명, 작품명 등 단일 명사',
+    helper: 'np_set · WORD_LIST',
+    type: 'WORD_LIST',
+    subtitle: '단일 명사 (np_set)',
+  },
+  {
+    key: 'cpSet',
+    label: '복합명사',
+    desc: '여러 단어로 구성된 복합 명사',
+    helper: 'cp_set · WORD_LIST',
+    type: 'WORD_LIST',
+    subtitle: '복합 명사 (cp_set)',
+  },
+  {
+    key: 'cpCaretSet',
+    label: '복합명사 분리',
+    desc: '^ 로 분리된 복합명사',
+    helper: 'cp_caret_set · WORD_LIST_COMPOUND',
+    type: 'WORD_LIST_COMPOUND',
+    subtitle: '분리 표기 복합 명사 (cp_caret_set)',
+  },
+  {
+    key: 'vvSet',
+    label: '동사',
+    desc: '새로운 동사/용언',
+    helper: 'vv_set · WORD_LIST',
+    type: 'WORD_LIST',
+    subtitle: '동사 (vv_set)',
+  },
+  {
+    key: 'vaSet',
+    label: '형용사',
+    desc: '새로운 형용사/형용사적 표현',
+    helper: 'va_set · WORD_LIST',
+    type: 'WORD_LIST',
+    subtitle: '형용사 (va_set)',
+  },
 ];
 
 function createEmptyDict(): CustomDictionaryData {
@@ -84,6 +131,7 @@ export default class BareunObsidianPlugin extends Plugin {
   settings: BkgaSettings = DEFAULT_SETTINGS;
   private diagnostics = new Map<string, ProcessedIssue[]>();
   private diagnosticsListeners = new Set<() => void>();
+  private dictionaryListeners = new Set<() => void>();
   private cmViews = new Set<EditorView>();
   private statusBarEl: HTMLElement | null = null;
   private pendingTimers = new Map<string, number>();
@@ -92,6 +140,9 @@ export default class BareunObsidianPlugin extends Plugin {
   private disabledCategories = new Set<string>();
   private lastContent = new Map<string, string>();
   private customDict: CustomDictionaryData = createEmptyDict();
+  private lastDictSync: number | null = null;
+  private lastMarkdownEditor: Editor | null = null;
+  private lastMarkdownFile: string | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -133,8 +184,41 @@ export default class BareunObsidianPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'bkga-sync-custom-dictionary',
+      name: 'Sync custom dictionary',
+      callback: () => {
+        void this.syncCustomDictionary(true);
+      },
+    });
+
+    this.addCommand({
+      id: 'bkga-add-selection-to-custom-dictionary',
+      name: 'Add selection to custom dictionary',
+      editorCallback: (editor) => {
+        void this.promptAddSelection(editor);
+      },
+    });
+
+    this.addCommand({
+      id: 'bkga-add-word-to-custom-dictionary',
+      name: 'Add word to custom dictionary',
+      callback: () => {
+        void this.promptAddWord();
+      },
+    });
+
+    this.addCommand({
+      id: 'bkga-remove-word-from-custom-dictionary',
+      name: 'Remove word from custom dictionary',
+      callback: () => {
+        void this.promptRemoveWord();
+      },
+    });
+
     this.registerEvent(
       this.app.workspace.on('editor-change', (editor, view) => {
+        this.rememberMarkdownEditor(view instanceof MarkdownView ? view : null);
         if (this.settings.analysisTrigger !== 'realtime') {
           return;
         }
@@ -146,6 +230,8 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
+        const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        this.rememberMarkdownEditor(mdView ?? null);
         if (this.settings.analysisTrigger !== 'realtime') {
           return;
         }
@@ -157,6 +243,7 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
+        this.rememberMarkdownEditor(this.app.workspace.getActiveViewOfType(MarkdownView));
         if (this.settings.analysisTrigger !== 'realtime') {
           return;
         }
@@ -202,6 +289,11 @@ export default class BareunObsidianPlugin extends Plugin {
     return this.diagnostics.get(path) ?? [];
   }
 
+  getVisibleIssues(path: string): ProcessedIssue[] {
+    const issues = this.diagnostics.get(path) ?? [];
+    return issues.filter((i) => this.isCategoryEnabled(i) && this.passesDictFilter(i));
+  }
+
   getCachedContent(path: string): string | null {
     return this.lastContent.get(path) ?? null;
   }
@@ -209,6 +301,17 @@ export default class BareunObsidianPlugin extends Plugin {
   onDiagnosticsChanged(listener: () => void): () => void {
     this.diagnosticsListeners.add(listener);
     return () => this.diagnosticsListeners.delete(listener);
+  }
+
+  onDictionaryChanged(listener: () => void): () => void {
+    this.dictionaryListeners.add(listener);
+    return () => this.dictionaryListeners.delete(listener);
+  }
+
+  private signalDictionaryChanged() {
+    for (const listener of this.dictionaryListeners) {
+      listener();
+    }
   }
 
   private isStaleRun(path: string, token: number): boolean {
@@ -241,8 +344,98 @@ export default class BareunObsidianPlugin extends Plugin {
     this.signalDiagnosticsChanged();
   }
 
+  toggleDictSuppression() {
+    this.settings.suppressDictIssues = !this.settings.suppressDictIssues;
+    this.saveBkgaSettings().catch((err) => console.error('[BKGA] Failed to save settings', err));
+    this.signalDiagnosticsChanged();
+  }
+
   getDictionary(): CustomDictionaryData {
     return this.customDict;
+  }
+
+  getDictionaryEntries(): Array<{ key: DictKey; word: string }> {
+    const entries: Array<{ key: DictKey; word: string }> = [];
+    (Object.keys(this.customDict) as DictKey[]).forEach((key) => {
+      for (const word of this.customDict[key]) {
+        entries.push({ key, word });
+      }
+    });
+    return entries;
+  }
+
+  lookupDictionary(word: string): DictKey[] {
+    const normalized = word.trim();
+    if (!normalized) return [];
+    const matches: DictKey[] = [];
+    (Object.keys(this.customDict) as DictKey[]).forEach((key) => {
+      if (this.customDict[key].includes(normalized)) {
+        matches.push(key);
+      }
+    });
+    return matches;
+  }
+
+  getDictionaryCount(): number {
+    return this.getDictionaryEntries().length;
+  }
+
+  getLastDictSync(): number | null {
+    return this.lastDictSync;
+  }
+
+  private passesDictFilter(issue: ProcessedIssue): boolean {
+    if (!this.settings.customDictEnabled) {
+      return true;
+    }
+    if (!this.settings.suppressDictIssues) {
+      return true;
+    }
+    const key = categoryKey(issue.category);
+    // 사전은 주로 맞춤법/표준어 계열만 무시하도록 제한
+    if (key === 'SPACING' || key === 'STATISTICAL') {
+      return true;
+    }
+    const targetWords = [issue.snippet, issue.suggestion ?? ''];
+    return !targetWords.some((w) => {
+      const normalized = normalizeWord(w);
+      return normalized && this.lookupDictionary(normalized).length > 0;
+    });
+  }
+
+  async tryAutoSyncDict() {
+    if (!this.settings.customDictEnabled) {
+      return;
+    }
+    if (!this.settings.apiKey.trim() || !this.settings.customDictDomain.trim()) {
+      return;
+    }
+    await this.syncCustomDictionary(false);
+  }
+
+  getActiveSelection(): string {
+    const editor = this.resolveMarkdownEditor();
+    return editor?.getSelection() ?? '';
+  }
+
+  async promptAddWordFromText(text: string) {
+    const normalized = text.trim();
+    if (!normalized) {
+      new Notice('추가할 단어를 입력하거나 선택해주세요.');
+      return;
+    }
+    const result = await new Promise<{ word: string; key: DictKey } | null>((resolve) => {
+      const modal = new AddDictionaryWordModal(this.app, normalized, resolve);
+      modal.open();
+    });
+    if (!result) return;
+    if (this.addDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new Notice(`"${result.word}"이(가) ${meta?.label ?? result.key} 사전에 추가되었습니다.`);
+      await this.tryAutoSyncDict();
+    } else {
+      new Notice('이미 존재하거나 잘못된 단어입니다.');
+    }
   }
 
   addDictEntry(key: DictKey, word: string): boolean {
@@ -252,7 +445,9 @@ export default class BareunObsidianPlugin extends Plugin {
       return false;
     }
     target.push(normalized);
+    target.sort((a, b) => a.localeCompare(b, 'ko'));
     this.saveBkgaSettings().catch((err) => console.error('[BKGA] Failed to save dict', err));
+    this.signalDictionaryChanged();
     return true;
   }
 
@@ -264,33 +459,47 @@ export default class BareunObsidianPlugin extends Plugin {
     }
     target.splice(idx, 1);
     this.saveBkgaSettings().catch((err) => console.error('[BKGA] Failed to save dict', err));
+    this.signalDictionaryChanged();
     return true;
   }
 
-  async syncCustomDictionary(showNotice: boolean): Promise<boolean> {
+  async syncCustomDictionary(showNotice = true): Promise<boolean> {
+    const config = this.resolveCustomDictConfig(showNotice);
+    if (!config) {
+      return false;
+    }
+    const payload = buildCustomDictPayload(config.domain, this.customDict);
+    const ok = await BareunClient.updateCustomDictionary(config.endpoint, config.apiKey, payload);
+    if (ok) {
+      this.lastDictSync = Date.now();
+    }
+    if (showNotice) {
+      new Notice(ok ? '사용자 사전이 동기화되었습니다.' : '사용자 사전 동기화에 실패했습니다.');
+    }
+    this.signalDictionaryChanged();
+    return ok;
+  }
+
+  private resolveCustomDictConfig(
+    showNotice: boolean
+  ): { endpoint: string; apiKey: string; domain: string } | null {
     if (!this.settings.customDictEnabled) {
       if (showNotice) new Notice('사용자 사전이 비활성화되어 있습니다.');
-      return false;
+      return null;
     }
     const apiKey = this.settings.apiKey.trim();
     if (!apiKey) {
       if (showNotice) new Notice('Bareun API 키가 필요합니다.');
-      return false;
+      return null;
     }
     const domain = this.settings.customDictDomain.trim();
     if (!domain) {
       if (showNotice) new Notice('사용자 사전 도메인을 설정해주세요.');
-      return false;
+      return null;
     }
     const endpoint =
       (this.settings.customDictEndpoint || '').trim() || DEFAULT_BAREUN_CUSTOM_DICTIONARY_ENDPOINT;
-
-    const payload = buildCustomDictPayload(domain, this.customDict);
-    const ok = await BareunClient.updateCustomDictionary(endpoint, apiKey, payload);
-    if (showNotice) {
-      new Notice(ok ? '사용자 사전이 동기화되었습니다.' : '사용자 사전 동기화에 실패했습니다.');
-    }
-    return ok;
+    return { endpoint, apiKey, domain };
   }
 
   async openIssuesView() {
@@ -313,6 +522,96 @@ export default class BareunObsidianPlugin extends Plugin {
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
     this.app.workspace.revealLeaf(targetLeaf);
+  }
+
+  private async promptAddSelection(editor?: Editor) {
+    const targetEditor = editor ?? this.resolveMarkdownEditor();
+    if (!targetEditor) {
+      new Notice('편집 중인 마크다운 노트를 찾을 수 없습니다.');
+      return;
+    }
+    const selection = targetEditor.getSelection();
+    const trimmed = selection.trim();
+    if (!trimmed) {
+      new Notice('사용자 사전에 추가할 텍스트를 선택해주세요.');
+      return;
+    }
+    await this.promptAddWordFromText(trimmed);
+  }
+
+  private async promptAddWord(initialWord = '') {
+    const result = await new Promise<{ word: string; key: DictKey } | null>((resolve) => {
+      const modal = new AddDictionaryWordModal(this.app, initialWord, resolve);
+      modal.open();
+    });
+    if (!result) {
+      return;
+    }
+    if (this.addDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new Notice(
+        `"${result.word}"이(가) ${meta?.label ?? result.key} 사전에 추가되었습니다.`
+      );
+      await this.tryAutoSyncDict();
+    } else {
+      new Notice('이미 존재하거나 잘못된 단어입니다.');
+    }
+  }
+
+  private async promptRemoveWord() {
+    const entries = this.getDictionaryEntries();
+    if (!entries.length) {
+      new Notice('사용자 사전에 저장된 단어가 없습니다.');
+      return;
+    }
+    const result = await new Promise<{ word: string; key: DictKey } | null>((resolve) => {
+      const modal = new DictEntryPickerModal(this.app, entries, resolve);
+      modal.open();
+    });
+    if (!result) {
+      return;
+    }
+    if (this.removeDictEntry(result.key, result.word)) {
+      const meta = dictCategories.find((c) => c.key === result.key);
+      new Notice(
+        `"${result.word}"을(를) ${meta?.label ?? result.key} 사전에서 삭제했습니다.`
+      );
+      await this.tryAutoSyncDict();
+    }
+  }
+
+  private resolveMarkdownEditor(): Editor | null {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active?.editor) {
+      return active.editor;
+    }
+    const activeEditor = (this.app.workspace as any).activeEditor?.editor as Editor | undefined;
+    if (activeEditor) {
+      return activeEditor;
+    }
+    if (this.lastMarkdownEditor) {
+      return this.lastMarkdownEditor;
+    }
+    if (this.lastMarkdownFile) {
+      let found: Editor | null = null;
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (found) return;
+        const view = leaf.view;
+        if (view instanceof MarkdownView && view.file?.path === this.lastMarkdownFile) {
+          found = view.editor;
+        }
+      });
+      if (found) return found;
+    }
+    let anyEditor: Editor | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (anyEditor) return;
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.editor) {
+        anyEditor = view.editor;
+      }
+    });
+    return anyEditor;
   }
 
   private queueAnalysis(file: TFile, editor: Editor) {
@@ -342,6 +641,7 @@ export default class BareunObsidianPlugin extends Plugin {
 
   private async runActiveAnalysis(showNotice: boolean) {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    this.rememberMarkdownEditor(view ?? null);
     if (!view || !view.file) {
       return;
     }
@@ -451,6 +751,13 @@ export default class BareunObsidianPlugin extends Plugin {
   async saveBkgaSettings() {
     await this.saveData({ settings: this.settings, customDict: this.customDict });
   }
+
+  private rememberMarkdownEditor(view: MarkdownView | null) {
+    if (view?.editor) {
+      this.lastMarkdownEditor = view.editor;
+      this.lastMarkdownFile = view.file?.path ?? null;
+    }
+  }
 }
 
 class BkgaIssuesView extends ItemView {
@@ -501,9 +808,7 @@ class BkgaIssuesView extends ItemView {
 
     const file = this.app.workspace.getActiveFile();
     this.lastRenderedPath = file?.path ?? null;
-    const issues = file
-      ? this.plugin.getDiagnostics(file.path).filter((i) => this.plugin.isCategoryEnabled(i))
-      : [];
+    const issues = file ? this.plugin.getVisibleIssues(file.path) : [];
     const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
     const editor = mdView?.editor;
     const cachedContent = file ? this.plugin.getCachedContent(file.path) : null;
@@ -553,6 +858,22 @@ class BkgaIssuesView extends ItemView {
       this.renderIssues();
     });
 
+    const dictToggle = legend.createSpan({
+      cls: `bkga-badge bkga-default ${this.plugin.settings.suppressDictIssues ? '' : 'inactive'}`,
+      text: '사전 제외',
+    });
+    dictToggle.setAttr(
+      'title',
+      this.plugin.settings.suppressDictIssues
+        ? '사용자 사전에 있는 단어 숨김 (클릭하여 표시)'
+        : '사용자 사전에 있는 단어 표시 중 (클릭하여 숨김)'
+    );
+    dictToggle.addEventListener('mousedown', (evt) => {
+      evt.preventDefault();
+      this.plugin.toggleDictSuppression();
+      this.renderIssues();
+    });
+
     if (!issues.length) {
       container.createDiv({ cls: 'bkga-empty', text: 'This note has no BKGA issues.' });
       return;
@@ -593,6 +914,16 @@ class BkgaIssuesView extends ItemView {
           this.applySuggestion(issue);
         });
       }
+
+      const actionRow = item.createDiv({ cls: 'bkga-issue-actions' });
+      const addDictBtn = actionRow.createEl('button', {
+        cls: 'bkga-apply-btn secondary',
+        text: '사전에 추가',
+      });
+      addDictBtn.addEventListener('mousedown', (evt) => {
+        evt.preventDefault();
+        void this.plugin.promptAddWordFromText(issue.snippet || issue.suggestion || '');
+      });
 
       item.addEventListener('mousedown', (evt) => {
         evt.preventDefault();
@@ -692,6 +1023,8 @@ class BkgaIssuesView extends ItemView {
 }
 
 class BkgaDictionaryView extends ItemView {
+  private cleanup: Array<() => void> = [];
+
   constructor(leaf: WorkspaceLeaf, private plugin: BareunObsidianPlugin) {
     super(leaf);
   }
@@ -709,10 +1042,14 @@ class BkgaDictionaryView extends ItemView {
   }
 
   async onOpen() {
+    this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
   }
 
-  async onClose() {}
+  async onClose() {
+    this.cleanup.forEach((fn) => fn());
+    this.cleanup = [];
+  }
 
   private render() {
     const container = this.containerEl;
@@ -724,22 +1061,58 @@ class BkgaDictionaryView extends ItemView {
     const controls = header.createDiv({ cls: 'bkga-issues-count bkga-dict-actions' });
     const syncBtn = controls.createEl('button', { cls: 'bkga-apply-btn', text: '동기화' });
     syncBtn.addEventListener('click', () => {
-      void this.plugin.syncCustomDictionary(true).then(() => this.render());
+      void this.plugin.syncCustomDictionary(true);
+    });
+    const addSelectionBtn = controls.createEl('button', {
+      cls: 'bkga-apply-btn secondary',
+      text: '선택 추가',
+    });
+    addSelectionBtn.addEventListener('click', () => {
+      void this.plugin.promptAddSelection();
     });
 
+    const enabled = this.plugin.settings.customDictEnabled;
+    const domain = this.plugin.settings.customDictDomain.trim() || '(미설정)';
+    const endpoint =
+      (this.plugin.settings.customDictEndpoint || '').trim() ||
+      DEFAULT_BAREUN_CUSTOM_DICTIONARY_ENDPOINT;
+    const total = this.plugin.getDictionaryCount();
+    const lastSync = this.plugin.getLastDictSync();
+
     const status = container.createDiv({ cls: 'bkga-dict-status' });
-    status.setText(
-      this.plugin.settings.customDictEnabled
-        ? `도메인: ${this.plugin.settings.customDictDomain || '(미설정)'}`
-        : '사용자 사전 비활성화'
-    );
+    const chips = status.createDiv({ cls: 'bkga-dict-chips' });
+    chips.createSpan({ cls: 'bkga-dict-chip', text: enabled ? '활성화됨' : '비활성화' });
+    chips.createSpan({ cls: 'bkga-dict-chip', text: `도메인: ${domain}` });
+    chips.createSpan({ cls: 'bkga-dict-chip', text: `엔드포인트: ${endpoint}` });
+    chips.createSpan({ cls: 'bkga-dict-chip', text: `총 단어: ${total}` });
+    chips.createSpan({
+      cls: 'bkga-dict-chip',
+      text: lastSync ? `마지막 동기화: ${new Date(lastSync).toLocaleString()}` : '아직 동기화되지 않음',
+    });
+
+    if (!enabled) {
+      container.createDiv({
+        cls: 'bkga-callout warning',
+        text: '사용자 사전이 비활성화되어 있습니다. 설정에서 활성화한 후 동기화하세요.',
+      });
+    } else if (!this.plugin.settings.apiKey.trim() || !this.plugin.settings.customDictDomain.trim()) {
+      container.createDiv({
+        cls: 'bkga-callout warning',
+        text: 'API 키와 사용자 사전 도메인을 설정해야 동기화할 수 있습니다.',
+      });
+    }
 
     const form = container.createDiv({ cls: 'bkga-dict-form' });
+    form.createDiv({ cls: 'bkga-dict-form-label', text: '빠른 추가' });
     const input = form.createEl('input', { type: 'text', placeholder: '단어를 입력하세요' });
+    const autoSelection = this.plugin.getActiveSelection().trim();
+    if (autoSelection) {
+      input.value = autoSelection;
+    }
     const select = form.createEl('select');
     dictCategories.forEach((c) => {
-      const opt = select.createEl('option', { value: c.key, text: c.label });
-      opt.title = c.desc;
+      const opt = select.createEl('option', { value: c.key, text: `${c.label} (${c.helper})` });
+      opt.title = `${c.desc} · ${c.helper}`;
     });
     const addBtn = form.createEl('button', { cls: 'bkga-apply-btn', text: '추가' });
     addBtn.addEventListener('click', (evt) => {
@@ -753,7 +1126,7 @@ class BkgaDictionaryView extends ItemView {
       if (this.plugin.addDictEntry(key, word)) {
         new Notice(`"${word}" 추가됨`);
         input.value = '';
-        this.render();
+        void this.plugin.tryAutoSyncDict();
       } else {
         new Notice('이미 존재하거나 잘못된 단어입니다.');
       }
@@ -762,9 +1135,12 @@ class BkgaDictionaryView extends ItemView {
     const dict = this.plugin.getDictionary();
     dictCategories.forEach((c) => {
       const section = container.createDiv({ cls: 'bkga-dict-section' });
-      const title = section.createDiv({ cls: 'bkga-dict-section-title' });
-      title.setText(c.label);
+      const head = section.createDiv({ cls: 'bkga-dict-section-head' });
+      const title = head.createDiv({ cls: 'bkga-dict-section-title' });
+      title.setText(`${c.label} (${dict[c.key].length})`);
       title.setAttr('title', c.desc);
+      head.createDiv({ cls: 'bkga-dict-section-sub', text: c.helper });
+      section.createDiv({ cls: 'bkga-dict-helper', text: c.desc });
       const list = section.createDiv({ cls: 'bkga-dict-list' });
       const items = dict[c.key];
       if (!items.length) {
@@ -773,10 +1149,10 @@ class BkgaDictionaryView extends ItemView {
         items.forEach((word) => {
           const row = list.createDiv({ cls: 'bkga-dict-row' });
           row.createSpan({ text: word });
-          const del = row.createEl('button', { cls: 'bkga-apply-btn', text: '삭제' });
+          const del = row.createEl('button', { cls: 'bkga-apply-btn secondary', text: '삭제' });
           del.addEventListener('click', () => {
             this.plugin.removeDictEntry(c.key, word);
-            this.render();
+            void this.plugin.tryAutoSyncDict();
           });
         });
       }
@@ -916,6 +1292,7 @@ class BkgaSettingTab extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
           this.plugin.settings.customDictEnabled = value;
           await this.plugin.saveBkgaSettings();
+          this.plugin.signalDiagnosticsChanged();
         })
       );
 
@@ -944,6 +1321,123 @@ class BkgaSettingTab extends PluginSettingTab {
             await this.plugin.saveBkgaSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName('Hide issues present in custom dictionary')
+      .setDesc('사용자 사전에 등록된 단어는 Issues/밑줄에서 숨깁니다.')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.suppressDictIssues).onChange(async (value) => {
+          this.plugin.settings.suppressDictIssues = value;
+          await this.plugin.saveBkgaSettings();
+          this.plugin.signalDiagnosticsChanged();
+        })
+      );
+  }
+}
+
+class DictEntryPickerModal extends SuggestModal<{ word: string; key: DictKey }> {
+  private resolved = false;
+
+  constructor(
+    app: App,
+    private entries: Array<{ word: string; key: DictKey }>,
+    private onPick: (entry: { word: string; key: DictKey } | null) => void
+  ) {
+    super(app);
+    this.setPlaceholder('삭제할 단어를 선택하세요.');
+  }
+
+  getSuggestions(query: string): Array<{ word: string; key: DictKey }> {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      return this.entries;
+    }
+    return this.entries.filter((entry) => entry.word.toLowerCase().includes(q));
+  }
+
+  renderSuggestion(entry: { word: string; key: DictKey }, el: HTMLElement) {
+    const meta = dictCategories.find((c) => c.key === entry.key);
+    el.createDiv({ cls: 'bkga-dict-suggest-title', text: entry.word });
+    el.createDiv({
+      cls: 'bkga-dict-suggest-sub',
+      text: `${meta?.label ?? entry.key} · ${meta?.helper ?? ''}`.trim(),
+    });
+  }
+
+  onChooseSuggestion(entry: { word: string; key: DictKey }) {
+    this.resolved = true;
+    this.onPick(entry);
+  }
+
+  onClose() {
+    if (!this.resolved) {
+      this.onPick(null);
+    }
+  }
+}
+
+class AddDictionaryWordModal extends Modal {
+  private selectedKey: DictKey = 'npSet';
+  private word: string;
+  private submitted = false;
+
+  constructor(app: App, initialWord: string, private onResult: (payload: { word: string; key: DictKey } | null) => void) {
+    super(app);
+    this.word = initialWord.trim();
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: '사용자 사전에 추가' });
+
+    new Setting(contentEl)
+      .setName('단어')
+      .addText((text) => {
+        text.setPlaceholder('예: 인공지능');
+        text.setValue(this.word);
+        text.onChange((value) => (this.word = value));
+        text.inputEl.addEventListener('keydown', (evt) => {
+          if (evt.key === 'Enter') {
+            evt.preventDefault();
+            this.submit();
+          }
+        });
+        text.inputEl.focus();
+      });
+
+    new Setting(contentEl)
+      .setName('사전 종류')
+      .setDesc('단어가 속할 사용자 사전 카테고리를 선택하세요.')
+      .addDropdown((dropdown) => {
+        dictCategories.forEach((c) => dropdown.addOption(c.key, `${c.label} (${c.helper})`));
+        dropdown.setValue(this.selectedKey);
+        dropdown.onChange((value) => (this.selectedKey = value as DictKey));
+      });
+
+    const actions = contentEl.createDiv({ cls: 'bkga-modal-actions' });
+    const addBtn = actions.createEl('button', { cls: 'bkga-apply-btn', text: '추가' });
+    addBtn.addEventListener('click', () => this.submit());
+    const cancel = actions.createEl('button', { cls: 'bkga-apply-btn secondary', text: '취소' });
+    cancel.addEventListener('click', () => this.close());
+  }
+
+  private submit() {
+    const trimmed = this.word.trim();
+    if (!trimmed) {
+      new Notice('단어를 입력하세요.');
+      return;
+    }
+    this.submitted = true;
+    this.onResult({ word: trimmed, key: this.selectedKey });
+    this.close();
+  }
+
+  onClose() {
+    if (!this.submitted) {
+      this.onResult(null);
+    }
+    this.contentEl.empty();
   }
 }
 
@@ -984,11 +1478,11 @@ function createDecorationExtension(plugin: BareunObsidianPlugin) {
 
       private buildDecorations(): DecorationSet {
         const filePath = getFilePath(this.view);
-        if (!filePath) {
-          this.lastFilePath = null;
-          return Decoration.none;
-        }
-        const issues = plugin.getDiagnostics(filePath).filter((i) => plugin.isCategoryEnabled(i));
+    if (!filePath) {
+      this.lastFilePath = null;
+      return Decoration.none;
+    }
+    const issues = plugin.getVisibleIssues(filePath);
         if (!issues.length) {
           this.lastFilePath = filePath;
           return Decoration.none;
@@ -1007,12 +1501,6 @@ function createDecorationExtension(plugin: BareunObsidianPlugin) {
         for (const { iss, from, to } of sorted) {
           const deco = Decoration.mark({
             class: `bkga-underline ${categoryToClass(iss.category)}`,
-            attributes: {
-              title:
-                iss.suggestion && iss.suggestion !== ''
-                  ? `${iss.message}\nSuggestion: ${iss.suggestion}`
-                  : iss.message,
-            },
           });
           builder.add(from, to, deco);
         }
@@ -1032,7 +1520,7 @@ function createHoverExtension(plugin: BareunObsidianPlugin) {
     if (!filePath) {
       return null;
     }
-    const issues = plugin.getDiagnostics(filePath).filter((i) => plugin.isCategoryEnabled(i));
+    const issues = plugin.getVisibleIssues(filePath);
     if (!issues.length) {
       return null;
     }
@@ -1089,6 +1577,38 @@ function createHoverExtension(plugin: BareunObsidianPlugin) {
           sug.appendChild(text);
           dom.appendChild(sug);
         }
+
+        const dictMatches = plugin.lookupDictionary(iss.snippet || '');
+        if (dictMatches.length) {
+          const dictEl = document.createElement('div');
+          dictEl.className = 'bkga-tooltip-row';
+          const label = document.createElement('span');
+          label.className = 'bkga-tooltip-label';
+          label.textContent = '사용자 사전';
+          const text = document.createElement('span');
+          text.className = 'bkga-tooltip-text';
+          const names = dictMatches
+            .map((key) => dictCategories.find((c) => c.key === key)?.label || key)
+            .join(', ');
+          text.textContent = names;
+          dictEl.appendChild(label);
+          dictEl.appendChild(text);
+          dom.appendChild(dictEl);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'bkga-tooltip-actions';
+        const addBtn = document.createElement('button');
+        addBtn.className = 'bkga-mini-btn';
+        addBtn.textContent = '사전에 추가';
+        addBtn.addEventListener('click', (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          void plugin.promptAddWordFromText(iss.snippet || iss.suggestion || '');
+        });
+        actions.appendChild(addBtn);
+        dom.appendChild(actions);
+
         return { dom };
       },
     };
@@ -1097,6 +1617,10 @@ function createHoverExtension(plugin: BareunObsidianPlugin) {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeWord(text: string): string {
+  return text.replace(/[`"'”“‘’\s]+/g, '').trim();
 }
 
 function categoryToClass(category: string): string {
@@ -1218,7 +1742,7 @@ function buildCustomDictPayload(domain: string, data: CustomDictionaryData) {
     dict: {
       domain_name: domain,
       np_set: toSet(data.npSet, 'WORD_LIST'),
-      cp_set: toSet(data.cpSet, 'WORD_LIST_COMPOUND'),
+      cp_set: toSet(data.cpSet, 'WORD_LIST'),
       cp_caret_set: toSet(data.cpCaretSet, 'WORD_LIST_COMPOUND'),
       vv_set: toSet(data.vvSet, 'WORD_LIST'),
       va_set: toSet(data.vaSet, 'WORD_LIST'),
