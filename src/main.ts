@@ -525,7 +525,7 @@ export default class BareunObsidianPlugin extends Plugin {
     await this.app.workspace.revealLeaf(targetLeaf);
   }
 
-  private async promptAddSelection(editor?: Editor) {
+  async promptAddSelection(editor?: Editor) {
     const targetEditor = editor ?? this.resolveMarkdownEditor();
     if (!targetEditor) {
       new Notice('편집 중인 마크다운 노트를 찾을 수 없습니다.');
@@ -649,7 +649,7 @@ export default class BareunObsidianPlugin extends Plugin {
     await this.runAnalysisForFile(view.file, showNotice);
   }
 
-  private async runAnalysisForFile(file: TFile, showNotice: boolean) {
+  async runAnalysisForFile(file: TFile, showNotice: boolean) {
     if (!this.shouldAnalyze(file)) {
       this.clearDiagnostics(file.path);
       return;
@@ -783,7 +783,7 @@ class BkgaIssuesView extends ItemView {
     return 'spell-check';
   }
 
-  async onOpen() {
+  onOpen(): Promise<void> {
     this.cleanup.push(this.plugin.onDiagnosticsChanged(() => this.renderIssues()));
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
@@ -795,11 +795,13 @@ class BkgaIssuesView extends ItemView {
       })
     );
     this.renderIssues();
+    return Promise.resolve();
   }
 
-  async onClose() {
+  onClose(): Promise<void> {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
+    return Promise.resolve();
   }
 
   private renderIssues() {
@@ -1042,14 +1044,16 @@ class BkgaDictionaryView extends ItemView {
     return 'book';
   }
 
-  async onOpen() {
+  onOpen(): Promise<void> {
     this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
+    return Promise.resolve();
   }
 
-  async onClose() {
+  onClose(): Promise<void> {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
+    return Promise.resolve();
   }
 
   private render() {
@@ -1193,8 +1197,7 @@ class BkgaSettingTab extends PluginSettingTab {
       .setDesc('Enter the API key issued at https://bareun.ai.')
       .addText((text) =>
         text
-          // eslint-disable-next-line obsidianmd/ui/sentence-case -- placeholder는 키 형태 그대로 표기
-          .setPlaceholder('Example: bareun_abc123')
+          .setPlaceholder('Example: Bareun-abc123')
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
             this.plugin.settings.apiKey = value.trim();

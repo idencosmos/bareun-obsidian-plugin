@@ -3770,7 +3770,7 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
   getIcon() {
     return "spell-check";
   }
-  async onOpen() {
+  onOpen() {
     this.cleanup.push(this.plugin.onDiagnosticsChanged(() => this.renderIssues()));
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
@@ -3782,10 +3782,12 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
       })
     );
     this.renderIssues();
+    return Promise.resolve();
   }
-  async onClose() {
+  onClose() {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
+    return Promise.resolve();
   }
   renderIssues() {
     const container = this.containerEl;
@@ -3995,13 +3997,15 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
   getIcon() {
     return "book";
   }
-  async onOpen() {
+  onOpen() {
     this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
+    return Promise.resolve();
   }
-  async onClose() {
+  onClose() {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
+    return Promise.resolve();
   }
   render() {
     const container = this.containerEl;
@@ -4126,7 +4130,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     new import_obsidian.Setting(containerEl).setName("Bareun API key").setDesc("Enter the API key issued at https://bareun.ai.").addText(
-      (text) => text.setPlaceholder("Example: bareun_abc123").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
+      (text) => text.setPlaceholder("Example: Bareun-abc123").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value.trim();
         await this.plugin.saveBkgaSettings();
       })

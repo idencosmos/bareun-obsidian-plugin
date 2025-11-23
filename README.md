@@ -63,6 +63,49 @@ npm run build
 - Obsidian에 로드할 때 `manifest.json`, `main.js`, `main.js.map`, `styles.css` 네 파일이 필요합니다.
 - 릴리스 전에는 `npm run lint`로 ESLint 전체 검증을 항상 수행하세요.
 
+## 개발 워크플로우 & 검증 절차
+
+코드 수정/추가/개선 시 아래 순서를 기본 원칙으로 삼습니다. 각각을 수행해야 하는 이유도 함께 적어 둡니다.
+
+1) 준비
+- `npm install`로 의존성을 맞춥니다. (버전 차이로 인한 빌드/타입 오차 방지)
+- Obsidian 플러그인 샌드박스에 `manifest.json`, `main.js`, `main.js.map`, `styles.css` 네 파일만 배포됨을 전제하고, 새 의존성 추가가 필요한지 검토합니다. 불필요한 런타임 의존성은 피합니다.
+- Bareun API 키는 절대 코드/커밋에 포함하지 않습니다. 테스트 시 사용자 설정 탭에서만 입력합니다.
+
+2) 변경 전 확인
+- 수정 이유/재현 절차를 정리합니다. (재현 불가 상태에서 수정하면 회귀 가능성이 높음)
+- 영향 범위를 파악합니다: 편집기 확장(Codemirror), 명령/이벤트 핸들러, 사용자 사전 동기화 등.
+
+3) 구현
+- UI 문자열은 `eslint-plugin-obsidianmd` 규칙에 맞춰 작성합니다. 필요한 경우 `brands` 목록에 추가합니다.
+- DOM 조작은 CSS 클래스를 우선 사용하고, Obsidian API 가이드를 따릅니다.
+- 타이머/리소스 등록 시 `onunload`에서 정리되는지 확인합니다.
+- 네트워크 호출은 TLS 검증을 끄지 않는 것을 기본으로 하고, 예외가 필요하면 옵션화하며 주석/문서로 근거를 남깁니다.
+
+4) 필수 검증 (변경 후 항상 수행)
+- `npm run lint` : Obsidian 플러그인 전용 규칙 포함, UI 문구/안전 패턴 검증.
+- `npm run check` : TypeScript 타입 검사. private/protected 접근 오류나 누락된 타입 선언을 방지.
+- `npm run build` : 실제 번들 생성 확인. 빌드 경고/오류가 없고 산출물이 존재해야 합니다.
+  - 필요한 경우 `npm run dev`로 수동 검증 중 핫리빌드를 사용합니다.
+
+5) 수동 기능 확인(가능한 경우)
+- 문제 표시: 편집기에서 밑줄·호버·Issues 패널이 정상 표시/작동하는지 확인합니다.
+- 명령 팔레트: “Run grammar assistant on current note”, Issues/Dictionary 관련 명령이 정상 동작하는지 확인합니다.
+- 사용자 사전: 추가/삭제/동기화 버튼이 정상 동작하고 설정 값(도메인/엔드포인트)이 반영되는지 확인합니다.
+- 상태바: 상태 텍스트가 기대대로 바뀌는지, 클릭 시 Issues 뷰가 열리는지 확인합니다.
+
+6) 문서/주석
+- 새로운 설정, 명령, 단축키, 동작 변경이 있으면 README 또는 별도 문서에 사용법을 추가합니다.
+- 코멘트는 비자명한 로직(예: 오프셋 정규화, 디바운스/쿨다운 계산) 앞에만 간결히 추가합니다.
+
+7) PR/커밋 전 최종 체크리스트
+- [ ] `npm run lint` 통과
+- [ ] `npm run check` 통과
+- [ ] `npm run build` 통과
+- [ ] 수동 검증(가능한 항목) 완료
+- [ ] API 키·시크릿 등 민감 정보가 커밋에 포함되지 않음
+- [ ] README(또는 관련 문서) 사용법/옵션 변경 사항 반영
+
 ## 라이선스 & 출처
 - 코드 전체는 MIT License 하에 배포됩니다 (`LICENSE` 참고, © 2025 Kwonhee Lee · idencosmos · Gurumii Lab).
 - VS Code 버전의 [smart-korean-grammar-assistant](https://github.com/Hun-Bot2/smart-korean-grammar-assistant) 프로젝트를 참고/포함하여 Obsidian API에 맞게 재작성했습니다.  
