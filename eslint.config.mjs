@@ -26,14 +26,14 @@ export default defineConfig([
         document: 'readonly',
       },
     },
+    linterOptions: {
+      reportUnusedDisableDirectives: 'error',
+      noInlineConfig: true,
+    },
     rules: {
-      'obsidianmd/ui/sentence-case': [
-        'error',
-        {
-          allowAutoFix: true,
-          brands: ['BKGA', 'Bareun'],
-        },
-      ],
+      '@typescript-eslint/require-await': 'error',
+      // Keep sentence-case checks strict (no plugin-specific brand exceptions) to mirror marketplace review.
+      'obsidianmd/ui/sentence-case': ['error', { enforceCamelCaseLower: true }],
     },
   },
 ]);

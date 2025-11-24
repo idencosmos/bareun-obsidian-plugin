@@ -172,7 +172,7 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: 'bkga-open-issues',
-      name: 'Show BKGA issues panel',
+      name: 'Show issues panel',
       callback: () => {
         void this.openIssuesView();
       },
@@ -180,7 +180,7 @@ export default class BareunObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: 'bkga-open-dictionary',
-      name: 'Open BKGA custom dictionary',
+      name: 'Open custom dictionary',
       callback: () => {
         void this.openDictionaryView();
       },
@@ -507,7 +507,7 @@ export default class BareunObsidianPlugin extends Plugin {
     const existing = this.app.workspace.getLeavesOfType(BKGA_ISSUES_VIEW_TYPE)[0];
     const targetLeaf = existing ?? this.app.workspace.getRightLeaf(false);
     if (!targetLeaf) {
-      new Notice('Unable to open BKGA issues view.');
+      new Notice('Unable to open the issues view.');
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_ISSUES_VIEW_TYPE, active: true });
@@ -518,7 +518,7 @@ export default class BareunObsidianPlugin extends Plugin {
     const existing = this.app.workspace.getLeavesOfType(BKGA_DICT_VIEW_TYPE)[0];
     const targetLeaf = existing ?? this.app.workspace.getRightLeaf(false);
     if (!targetLeaf) {
-      new Notice('Unable to open BKGA dictionary view.');
+      new Notice('Unable to open the dictionary view.');
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
@@ -776,14 +776,14 @@ class BkgaIssuesView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'BKGA issues';
+    return 'Grammar issues';
   }
 
   getIcon(): string {
     return 'spell-check';
   }
 
-  onOpen(): Promise<void> {
+  onOpen(): void {
     this.cleanup.push(this.plugin.onDiagnosticsChanged(() => this.renderIssues()));
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
@@ -795,13 +795,11 @@ class BkgaIssuesView extends ItemView {
       })
     );
     this.renderIssues();
-    return Promise.resolve();
   }
 
-  onClose(): Promise<void> {
+  onClose(): void {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
-    return Promise.resolve();
   }
 
   private renderIssues() {
@@ -1037,23 +1035,21 @@ class BkgaDictionaryView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'BKGA custom dictionary';
+    return 'Custom dictionary';
   }
 
   getIcon(): string {
     return 'book';
   }
 
-  onOpen(): Promise<void> {
+  onOpen(): void {
     this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
-    return Promise.resolve();
   }
 
-  onClose(): Promise<void> {
+  onClose(): void {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
-    return Promise.resolve();
   }
 
   private render() {
@@ -1197,7 +1193,7 @@ class BkgaSettingTab extends PluginSettingTab {
       .setDesc('Enter the API key issued at https://bareun.ai.')
       .addText((text) =>
         text
-          .setPlaceholder('Example: Bareun-abc123')
+          .setPlaceholder('Bareun-abc123')
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
             this.plugin.settings.apiKey = value.trim();
@@ -1292,7 +1288,7 @@ class BkgaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Enable custom dictionary')
-      .setDesc('Sync your own words to the Bareun custom dictionary.')
+      .setDesc('Sync your own words to the custom dictionary.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
           this.plugin.settings.customDictEnabled = value;

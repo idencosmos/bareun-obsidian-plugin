@@ -3231,14 +3231,14 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     });
     this.addCommand({
       id: "bkga-open-issues",
-      name: "Show BKGA issues panel",
+      name: "Show issues panel",
       callback: () => {
         void this.openIssuesView();
       }
     });
     this.addCommand({
       id: "bkga-open-dictionary",
-      name: "Open BKGA custom dictionary",
+      name: "Open custom dictionary",
       callback: () => {
         void this.openDictionaryView();
       }
@@ -3522,7 +3522,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     const existing = this.app.workspace.getLeavesOfType(BKGA_ISSUES_VIEW_TYPE)[0];
     const targetLeaf = existing ?? this.app.workspace.getRightLeaf(false);
     if (!targetLeaf) {
-      new import_obsidian.Notice("Unable to open BKGA issues view.");
+      new import_obsidian.Notice("Unable to open the issues view.");
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_ISSUES_VIEW_TYPE, active: true });
@@ -3532,7 +3532,7 @@ var BareunObsidianPlugin = class extends import_obsidian.Plugin {
     const existing = this.app.workspace.getLeavesOfType(BKGA_DICT_VIEW_TYPE)[0];
     const targetLeaf = existing ?? this.app.workspace.getRightLeaf(false);
     if (!targetLeaf) {
-      new import_obsidian.Notice("Unable to open BKGA dictionary view.");
+      new import_obsidian.Notice("Unable to open the dictionary view.");
       return;
     }
     await targetLeaf.setViewState({ type: BKGA_DICT_VIEW_TYPE, active: true });
@@ -3765,7 +3765,7 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
     return BKGA_ISSUES_VIEW_TYPE;
   }
   getDisplayText() {
-    return "BKGA issues";
+    return "Grammar issues";
   }
   getIcon() {
     return "spell-check";
@@ -3782,12 +3782,10 @@ var BkgaIssuesView = class extends import_obsidian.ItemView {
       })
     );
     this.renderIssues();
-    return Promise.resolve();
   }
   onClose() {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
-    return Promise.resolve();
   }
   renderIssues() {
     const container = this.containerEl;
@@ -3992,7 +3990,7 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
     return BKGA_DICT_VIEW_TYPE;
   }
   getDisplayText() {
-    return "BKGA custom dictionary";
+    return "Custom dictionary";
   }
   getIcon() {
     return "book";
@@ -4000,12 +3998,10 @@ var BkgaDictionaryView = class extends import_obsidian.ItemView {
   onOpen() {
     this.cleanup.push(this.plugin.onDictionaryChanged(() => this.render()));
     this.render();
-    return Promise.resolve();
   }
   onClose() {
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
-    return Promise.resolve();
   }
   render() {
     const container = this.containerEl;
@@ -4130,7 +4126,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     new import_obsidian.Setting(containerEl).setName("Bareun API key").setDesc("Enter the API key issued at https://bareun.ai.").addText(
-      (text) => text.setPlaceholder("Example: Bareun-abc123").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
+      (text) => text.setPlaceholder("Bareun-abc123").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value.trim();
         await this.plugin.saveBkgaSettings();
       })
@@ -4178,7 +4174,7 @@ var BkgaSettingTab = class extends import_obsidian.PluginSettingTab {
       });
     });
     new import_obsidian.Setting(containerEl).setName("Custom dictionary").setHeading();
-    new import_obsidian.Setting(containerEl).setName("Enable custom dictionary").setDesc("Sync your own words to the Bareun custom dictionary.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Enable custom dictionary").setDesc("Sync your own words to the custom dictionary.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.customDictEnabled).onChange(async (value) => {
         this.plugin.settings.customDictEnabled = value;
         await this.plugin.saveBkgaSettings();
